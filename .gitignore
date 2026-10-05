@@ -1,82 +1,21 @@
-# ==============================================================================
-# .gitignore — Antigravity Voice Assistant
-# ==============================================================================
-
-# 1. Виртуальные окружения Python
-.venv/
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
-
-# 2. Байткод Python и файлы кэша
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-*.pyd
-.Python
+
+# C extensions
 *.so
 
-# 3. Веса и бинарные файлы локальных нейросетей (LLM / VLM / GGUF)
-# Исключаем тяжелые бинарные модели (например, Jedi-3B / Whisper Turbo)
-/models/
-*.gguf
-*.bin
-*.pt
-*.pth
-*.onnx
-*.safetensors
-
-# 4. Логи, дампы и временные файлы выполнения
-logs/*
-!logs/.gitkeep
-scratch/
-*.log
-*.tmp
-*.temp
-*.bak
-*.swp
-*.swo
-
-# 5. Системные файлы операционных систем
-# Windows
-Thumbs.db
-ehthumbs.db
-ehthumbs_vista.db
-Desktop.ini
-$RECYCLE.BIN/
-*.lnk
-
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
-._*
-
-# 6. Настройки сред разработки (IDE) и редакторов
-.idea/
-.vscode/
-*.sublime-project
-*.sublime-workspace
-.project
-.pydevproject
-.settings/
-
-# 7. Конфиденциальные данные и переменные окружения
-.env
-.env.local
-.env.*.local
-*.pem
-*.key
-
-# 8. Артефакты сборки, пакетирования и тестирования
+# Distribution / packaging
+.Python
 build/
-dist/
 develop-eggs/
+dist/
 downloads/
 eggs/
 .eggs/
+lib/
+lib64/
 parts/
 sdist/
 var/
@@ -84,16 +23,42 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-.pytest_cache/
-.coverage
-htmlcov/
-.mypy_cache/
-.ruff_cache/
 
-# 9. Артефакты и кэши ИИ-агентов
-.gemini/
-.brain/
-scratch/
-repomix-output.*
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
 
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
 
+# IDE & Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Operating System Files
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# AI Models & Large Weight Files (downloaded locally)
+models/
+*.onnx
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Audio & Temporary Artifacts
+logs/
+*.log
+temp/
+tmp/
+repomix-output.xml
+repomix-output.json
