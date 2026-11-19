@@ -46,6 +46,8 @@ logs/
 npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
+config/*_cache.json
+config/app_cache.json
 
 # IDE & OS Files
 .vscode/
