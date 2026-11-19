@@ -1,0 +1,32 @@
+{
+  "web_aliases": {
+    "ютуб": "https://www.youtube.com",
+    "youtube": "https://www.youtube.com",
+    "гугл": "https://www.google.com",
+    "google": "https://www.google.com",
+    "яндекс": "https://ya.ru",
+    "yandex": "https://ya.ru",
+    "гитхаб": "https://github.com",
+    "github": "https://github.com",
+    "вк": "https://vk.com",
+    "телеграм": "https://web.telegram.org"
+  },
+  "search_engines": {
+    "google": "https://www.google.com/search?q={query}",
+    "yandex": "https://ya.ru/search/?text={query}",
+    "youtube": "https://www.youtube.com/results?search_query={query}"
+  },
+  "app_aliases": {
+    "телега": "telegram",
+    "телефон": "telegram",
+    "браузер": "chrome",
+    "хром": "chrome",
+    "терминал": "wt",
+    "консоль": "wt",
+    "блокнот": "notepad",
+    "калькулятор": "calculator",
+    "проводник": "explorer",
+    "диспетчер задач": "taskmgr",
+    "настройки": "ms-settings:"
+  }
+}

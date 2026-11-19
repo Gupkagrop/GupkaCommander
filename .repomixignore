@@ -1,0 +1,64 @@
+# Repomix AST Ignore Rules
+# Exclude noisy, binary, virtualenv, and build artifacts to keep Repomix AST under 8,000 tokens
+
+# Dependencies & Package Managers
+node_modules/
+.pnpm-store/
+.venv/
+venv/
+env/
+packages/
+__pycache__/
+
+# Build & Compiler Outputs
+dist/
+build/
+out/
+bin/
+obj/
+target/
+*.exe
+*.dll
+*.pdb
+*.msi
+
+# Local AI Models & Weights
+models/
+weights/
+*.onnx
+*.bin
+*.pt
+*.safetensors
+*.gguf
+*.lock
+uv.lock
+
+# Test suites (keep AST focused on production logic)
+tests/
+__tests__/
+*.test.*
+*.spec.*
+e2e/
+
+# Binary & Media Assets
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
+*.svg
+*.webp
+*.mp3
+*.wav
+*.mp4
+*.pdf
+*.zip
+*.tar.gz
+
+# Repomix & State outputs
+repomix-output.*
+TASK.md
+.git/
+.idea/
+.vscode/
+logs/

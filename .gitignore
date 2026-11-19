@@ -1,0 +1,56 @@
+# Standard Git Ignore Template for Windows Desktop & Web
+
+# Environment Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Ephemeral Agent Artifacts (Strictly never commit to Git)
+repomix-output.*
+
+# Dependencies
+node_modules/
+.pnpm-store/
+.venv/
+venv/
+env/
+packages/
+__pycache__/
+*.py[cod]
+
+# Build & Compiled Outputs
+dist/
+build/
+out/
+bin/
+obj/
+target/
+*.exe
+*.dll
+*.msi
+
+# Local AI Models & Weights (Heavy Binaries)
+models/
+weights/
+*.onnx
+*.bin
+*.pt
+*.safetensors
+*.gguf
+
+# Logs & Diagnostics
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# IDE & OS Files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+[Dd]esktop.ini
+$RECYCLE.BIN/
