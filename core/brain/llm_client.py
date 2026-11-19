@@ -16,7 +16,7 @@ from typing import Any
 
 import requests
 
-from core.routing.intent_router import Intent, IntentRouter
+from core.routing.intent_router import Intent, IntentRouter, RouteResult
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +184,72 @@ SYSTEM_TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "click_ui_element",
+            "description": "Клик по элементу интерфейса Windows через Microsoft UI Automation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "element_name": {
+                        "type": "string",
+                        "description": "Имя или текст элемента UI (кнопка, меню, ссылка).",
+                    },
+                    "window_title": {
+                        "type": "string",
+                        "description": "Заголовок целевого окна (по умолчанию активное окно).",
+                    },
+                    "control_type": {
+                        "type": "string",
+                        "description": "Тип элемента (Button, MenuItem, Hyperlink).",
+                    },
+                },
+                "required": ["element_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "type_into_ui_element",
+            "description": "Ввод текста в текстовое поле окна через Microsoft UI Automation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "element_name": {
+                        "type": "string",
+                        "description": "Название или идентификатор поля ввода.",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Вводимый текст.",
+                    },
+                    "window_title": {
+                        "type": "string",
+                        "description": "Заголовок целевого окна (по умолчанию активное окно).",
+                    },
+                },
+                "required": ["element_name", "text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "inspect_ui_elements",
+            "description": "Инспекция дерева интерактивных элементов интерфейса через UIA.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "window_title": {
+                        "type": "string",
+                        "description": "Заголовок целевого окна (по умолчанию активное окно).",
+                    },
+                },
+            },
+        },
+    },
 ]
 
 
@@ -227,10 +293,72 @@ class FallbackRuleEngine:
                 }
             ]
 
+        if route.intent == Intent.UI_AUTOMATION:
+            return self._plan_ui_automation_fallback(route)
+
         if route.intent == Intent.VISION_INTERACT:
             return self._plan_vision_fallback(route.params.get("action", ""), route.target)
 
         return []
+
+    def _plan_ui_automation_fallback(self, route: RouteResult) -> list[dict[str, Any]]:
+        """Формирование запасных действий UI Automation по семантическим правилам."""
+        action = route.params.get("action", "click")
+        elem = str(route.params.get("element_name", route.target))
+        win = str(route.params.get("window_title", ""))
+
+        if action in ("click", "click_element"):
+            ctrl = str(route.params.get("control_type", ""))
+            return [
+                {
+                    "tool": "click_ui_element",
+                    "parameters": {
+                        "element_name": elem,
+                        "window_title": win,
+                        "control_type": ctrl,
+                    },
+                }
+            ]
+
+        if action in ("type", "type_text", "type_into_element"):
+            txt = str(route.params.get("text", ""))
+            return [
+                {
+                    "tool": "type_into_ui_element",
+                    "parameters": {
+                        "element_name": elem,
+                        "text": txt,
+                        "window_title": win,
+                    },
+                }
+            ]
+
+        if action in ("set_toggle", "toggle", "check", "uncheck"):
+            return [
+                {
+                    "tool": "click_ui_element",
+                    "parameters": {
+                        "element_name": elem,
+                        "window_title": win,
+                        "control_type": "CheckBox",
+                    },
+                }
+            ]
+
+        if action == "inspect":
+            return [
+                {
+                    "tool": "inspect_ui_elements",
+                    "parameters": {"window_title": win},
+                }
+            ]
+
+        return [
+            {
+                "tool": "click_ui_element",
+                "parameters": {"element_name": elem, "window_title": win, "control_type": ""},
+            }
+        ]
 
     def _plan_vision_fallback(self, action: str, target: str) -> list[dict[str, Any]]:
         """Формирование запасных зрительных действий."""
@@ -267,6 +395,21 @@ class FallbackRuleEngine:
 
         if route.intent == Intent.VISION_INTERACT:
             return "Анализирую состояние экрана в автономном режиме."
+
+        if route.intent == Intent.UI_AUTOMATION:
+            action = route.params.get("action", "click")
+            elem = str(route.params.get("element_name", route.target))
+            win = str(route.params.get("window_title", ""))
+            win_str = f" в окне '{win}'" if win else ""
+            if action in ("click", "click_element"):
+                return f"Выполняю клик по элементу '{elem}'{win_str}."
+            if action in ("type", "type_text", "type_into_element"):
+                txt = str(route.params.get("text", ""))
+                return f"Ввожу текст '{txt}' в элемент '{elem}'{win_str}."
+            if action in ("set_toggle", "toggle", "check", "uncheck"):
+                state_str = "включение" if route.params.get("text") == "true" else "отключение"
+                return f"Выполняю {state_str} переключателя '{elem}'{win_str}."
+            return f"Выполняю действие UI Automation с элементом '{elem}'{win_str}."
 
         lower = prompt.strip().lower()
         if any(w in lower for w in ("привет", "здравствуй", "добрый день")):

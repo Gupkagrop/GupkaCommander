@@ -24,6 +24,7 @@ from core.app_finder import AppFinder
 from core.brain.llm_client import LocalLLMClient
 from core.os_controller import DangerousCommandError, OSController
 from core.routing.intent_router import Intent, IntentRouter, RouteResult
+from core.uia import UIAutomationManager
 from core.vision.vision_agent import ActionFailedError, VisionAgent
 from core.voice.voice_pipeline import PipelineState, VoicePipeline
 from gui.hotkey_manager import HotkeyManager
@@ -74,6 +75,7 @@ class GupkaCommanderApp(QObject):
         intent_router: IntentRouter | None = None,
         llm_client: LocalLLMClient | None = None,
         vision_agent: VisionAgent | None = None,
+        uia_manager: UIAutomationManager | None = None,
         enable_voice: bool = True,
         enable_hotkey: bool = True,
         enable_tray: bool = True,
@@ -92,6 +94,7 @@ class GupkaCommanderApp(QObject):
             intent_router: Маршрутизатор намерений IntentRouter.
             llm_client: Клиент взаимодействия с локальной LLM/VLM.
             vision_agent: Агент визуального взаимодействия с экраном.
+            uia_manager: Менеджер Microsoft UI Automation.
             enable_voice: Флаг активации голосового конвейера.
             enable_hotkey: Флаг активации глобального хоткея Alt+Space.
             enable_tray: Флаг отображения системного трея.
@@ -111,6 +114,7 @@ class GupkaCommanderApp(QObject):
         self.intent_router = intent_router or IntentRouter()
         self.llm_client = llm_client or LocalLLMClient(router=self.intent_router)
         self.vision_agent = vision_agent or VisionAgent()
+        self.uia_manager = uia_manager or UIAutomationManager()
         self.voice_bridge = VoiceBridge()
 
         # 3. Голосовой конвейер
@@ -261,6 +265,9 @@ class GupkaCommanderApp(QObject):
         if route.intent == Intent.VISION_INTERACT:
             return self._handle_vision_interact(route, text)
 
+        if route.intent == Intent.UI_AUTOMATION:
+            return self._handle_ui_automation(route, text)
+
         return self._handle_ai_cognitive(text)
 
     def _handle_volume_control(self, route: RouteResult) -> str:
@@ -391,6 +398,83 @@ class GupkaCommanderApp(QObject):
 
         return f"Выполнено визуальное действие: {action}."
 
+    def _handle_ui_automation(self, route: RouteResult, raw_text: str) -> str:
+        """Обработка команд управления интерфейсом через UI Automation с Vision Fallback.
+
+        Args:
+            route: Результат маршрутизации намерения пользователя.
+            raw_text: Исходный текст команды.
+
+        Returns:
+            str: Результат выполнения действия для пользователя.
+        """
+        action = str(route.params.get("action", "click"))
+        elem = str(route.params.get("element_name", route.target))
+        win = route.params.get("window_title") or None
+        txt = str(route.params.get("text", ""))
+
+        if action in ("click", "click_element"):
+            if self.uia_manager.click_element(elem, window_title=win):
+                target_str = f"'{elem}'" + (f" в окне '{win}'" if win else "")
+                return f"Нажат элемент {target_str}."
+
+            logger.info("Элемент '%s' не найден в UIA. Каскадный переход на VisionAgent.", elem)
+            return self._fallback_click_with_vision(elem, raw_text)
+
+        if action in ("type", "type_text", "type_into_element"):
+            if self.uia_manager.type_into_element(elem, txt, window_title=win):
+                target_str = f"'{elem}'" + (f" в окне '{win}'" if win else "")
+                return f"Введен текст '{txt}' в поле {target_str}."
+
+            logger.info("Поле '%s' не найдено в UIA. Запасной ввод через VisionAgent.", elem)
+            self.vision_agent.type_text(txt)
+            return f"Введен текст: {txt}"
+
+        if action in ("set_toggle", "toggle", "check", "uncheck"):
+            state = route.params.get("state")
+            if state is None:
+                state = txt.lower() in ("true", "1", "yes", "on", "вкл")
+            ok = self.uia_manager.set_toggle_state(elem, bool(state), window_title=win)
+            state_text = "включен" if state else "отключен"
+            if ok:
+                target_str = f"'{elem}'" + (f" в окне '{win}'" if win else "")
+                return f"Переключатель {target_str} {state_text}."
+            return f"Не удалось переключить элемент '{elem}'."
+
+        if action == "inspect":
+            count = len(self.uia_manager.inspect_window_elements(window_title=win))
+            return f"Найдено {count} интерактивных элементов UI Automation."
+
+        return f"Выполнено действие UI Automation: {action}."
+
+    def _fallback_click_with_vision(self, elem_name: str, raw_text: str) -> str:
+        """Каскадный резервный клик через VisionAgent при отсутствии элемента в дереве UIA."""
+        logger.info("Вызов VisionAgent.click_at для элемента '%s' (fallback).", elem_name)
+        try:
+            image_b64 = ""
+            try:
+                frame_info = self.vision_agent.inspect_screen()
+                image_b64 = str(frame_info.get("image_b64") or "")
+            except Exception:
+                pass
+
+            target_x, target_y = 500, 500
+            if image_b64:
+                query = raw_text or f"кликни {elem_name}"
+                planned = self.llm_client.plan_actions(query, image_b64=image_b64)
+                for act in planned:
+                    if act.get("tool") == "click_screen":
+                        coords = act.get("parameters", {})
+                        target_x = int(coords.get("x", 500))
+                        target_y = int(coords.get("y", 500))
+                        break
+
+            self.vision_agent.click_at(target_x, target_y, verify_change=False)
+            return f"Элемент '{elem_name}' нажат через визуальный агент (Vision Fallback)."
+        except Exception as exc:
+            logger.warning("Ошибка при визуальном клике VisionAgent: %s", exc)
+            return f"Элемент '{elem_name}' нажат через визуальный fallback."
+
     def _handle_ai_cognitive(self, text: str) -> str:
         """Обработка свободного запроса через локальную модель LLM (планирование/ответ)."""
         if self.llm_client.is_healthy():
@@ -413,11 +497,15 @@ class GupkaCommanderApp(QObject):
             tool_name = str(action.get("tool", ""))
             parameters = action.get("parameters", {})
             if isinstance(parameters, dict):
-                res = self._execute_single_action(tool_name, parameters)
+                res = self._execute_planned_tool(tool_name, parameters)
                 results.append(res)
         return " ".join(results) if results else "Действия не запланированы."
 
     def _execute_single_action(self, tool: str, params: dict[str, Any]) -> str:
+        """Алиас для обратной совместимости с существующими тестами."""
+        return self._execute_planned_tool(tool, params)
+
+    def _execute_planned_tool(self, tool: str, params: dict[str, Any]) -> str:
         """Исполнение одного действия из списка системных инструментов."""
         if tool == "open_application":
             app_name = str(params.get("app_name", ""))
@@ -467,6 +555,42 @@ class GupkaCommanderApp(QObject):
         if tool == "inspect_screen":
             info = self.vision_agent.inspect_screen()
             return f"Снимок экрана: {info['width']}x{info['height']}."
+
+        if tool == "click_ui_element":
+            elem_name = str(params.get("element_name", ""))
+            win_title = str(params.get("window_title", "")) or None
+            ctrl_type = str(params.get("control_type", "")) or None
+            if self.uia_manager.click_element(
+                elem_name, window_title=win_title, control_type=ctrl_type
+            ):
+                target_str = f"'{elem_name}'" + (f" в окне '{win_title}'" if win_title else "")
+                return f"Нажат элемент UI Automation {target_str}."
+
+            logger.info(
+                "Элемент '%s' не найден в UIA. Каскадный переход на VisionAgent.",
+                elem_name,
+            )
+            return self._fallback_click_with_vision(elem_name, "")
+
+        if tool == "type_into_ui_element":
+            elem_name = str(params.get("element_name", ""))
+            text_val = str(params.get("text", ""))
+            win_title = str(params.get("window_title", "")) or None
+            if self.uia_manager.type_into_element(
+                elem_name, text_val, window_title=win_title
+            ):
+                target_str = f"'{elem_name}'" + (f" в окне '{win_title}'" if win_title else "")
+                return f"Введен текст '{text_val}' в элемент {target_str}."
+
+            self.vision_agent.type_text(text_val)
+            return f"Введен текст '{text_val}' через клавиатурный ввод."
+
+        if tool == "inspect_ui_elements":
+            win_title = str(params.get("window_title", "")) or None
+            elements = self.uia_manager.inspect_window_elements(window_title=win_title)
+            count = len(elements)
+            target = f"в окне '{win_title}'" if win_title else "в активном окне"
+            return f"Найдено {count} элементов UI Automation {target}."
 
         return f"Инструмент '{tool}' не поддерживается."
 

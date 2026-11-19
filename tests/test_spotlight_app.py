@@ -22,6 +22,8 @@ from PySide6.QtWidgets import QApplication
 
 from core.app_finder import AppFinder, AppInfo
 from core.os_controller import OSController
+from core.uia import UIAutomationManager
+from core.vision.vision_agent import VisionAgent
 from core.voice.voice_pipeline import PipelineState, VoicePipeline
 from gui.hotkey_manager import HotkeyManager
 from gui.spotlight_bar import SpotlightBar
@@ -289,3 +291,115 @@ class TestMainApplicationController:
 
         # Очистка
         app_ctrl.shutdown()
+
+
+class TestGupkaCommanderAppUIAutomation:
+    """Тестирование интеграции Microsoft UI Automation и каскадного Vision Fallback."""
+
+    @pytest.fixture
+    def app_with_uia(
+        self, qapp: QApplication
+    ) -> Generator[tuple[GupkaCommanderApp, MagicMock, MagicMock], None, None]:
+        """Фикстура приложения GupkaCommanderApp с моками UIA и Vision."""
+        mock_finder = MagicMock(spec=AppFinder)
+        mock_os = MagicMock(spec=OSController)
+        mock_voice = MagicMock(spec=VoicePipeline)
+        mock_bar = SpotlightBar(hide_on_focus_loss=False)
+        mock_tray = TrayManager()
+        mock_hotkey = HotkeyManager()
+        mock_uia = MagicMock(spec=UIAutomationManager)
+        mock_vision = MagicMock(spec=VisionAgent)
+
+        app_ctrl = GupkaCommanderApp(
+            app=qapp,
+            app_finder=mock_finder,
+            os_controller=mock_os,
+            voice_pipeline=mock_voice,
+            spotlight_bar=mock_bar,
+            tray_manager=mock_tray,
+            hotkey_manager=mock_hotkey,
+            uia_manager=mock_uia,
+            vision_agent=mock_vision,
+            enable_voice=False,
+            enable_hotkey=False,
+            enable_tray=False,
+        )
+        yield app_ctrl, mock_uia, mock_vision
+        app_ctrl.shutdown()
+
+    def test_uia_click_element_success(
+        self, app_with_uia: tuple[GupkaCommanderApp, MagicMock, MagicMock]
+    ) -> None:
+        """Проверка успешного вызова click_element через UIA."""
+        app, mock_uia, mock_vision = app_with_uia
+        mock_uia.click_element.return_value = True
+
+        resp = app.execute_command("нажми кнопку Сохранить в окне Блокнот")
+        mock_uia.click_element.assert_called_once_with("Сохранить", window_title="Блокнот")
+        assert "Нажат элемент" in resp
+        assert "Сохранить" in resp
+        assert "Блокнот" in resp
+        mock_vision.click_at.assert_not_called()
+
+    def test_uia_cascading_fallback_to_vision(
+        self, app_with_uia: tuple[GupkaCommanderApp, MagicMock, MagicMock]
+    ) -> None:
+        """Проверка каскадного fallback на VisionAgent при отсутствии элемента в UIA."""
+        app, mock_uia, mock_vision = app_with_uia
+        mock_uia.click_element.return_value = False
+        mock_vision.inspect_screen.return_value = {"image_b64": "fake"}
+
+        resp = app.execute_command("нажми кнопку Несуществующая")
+        mock_uia.click_element.assert_called_once_with("Несуществующая", window_title=None)
+        mock_vision.click_at.assert_called_once()
+        assert "Vision Fallback" in resp
+
+    def test_uia_type_into_element(
+        self, app_with_uia: tuple[GupkaCommanderApp, MagicMock, MagicMock]
+    ) -> None:
+        """Проверка ввода текста через UIA."""
+        app, mock_uia, _ = app_with_uia
+        mock_uia.type_into_element.return_value = True
+
+        resp = app.execute_command("введи в поле Логин текст admin")
+        mock_uia.type_into_element.assert_called_once_with("Логин", "admin", window_title=None)
+        assert "Введен текст" in resp
+
+    def test_uia_toggle_state(
+        self, app_with_uia: tuple[GupkaCommanderApp, MagicMock, MagicMock]
+    ) -> None:
+        """Проверка переключения CheckBox через UIA."""
+        app, mock_uia, _ = app_with_uia
+        mock_uia.set_toggle_state.return_value = True
+
+        resp = app.execute_command("поставь галочку Автосохранение")
+        mock_uia.set_toggle_state.assert_called_once_with("Автосохранение", True, window_title=None)
+        assert "включен" in resp
+
+    def test_execute_planned_tool_uia(
+        self, app_with_uia: tuple[GupkaCommanderApp, MagicMock, MagicMock]
+    ) -> None:
+        """Проверка прямого вызова UIA-инструментов через _execute_planned_tool."""
+        app, mock_uia, _ = app_with_uia
+        mock_uia.click_element.return_value = True
+        mock_uia.type_into_element.return_value = True
+        mock_uia.inspect_window_elements.return_value = [{"Name": "Btn"}]
+
+        res_click = app._execute_planned_tool(
+            "click_ui_element",
+            {"element_name": "OK", "window_title": "Calc", "control_type": "Button"},
+        )
+        assert "Нажат элемент" in res_click
+
+        res_type = app._execute_planned_tool(
+            "type_into_ui_element",
+            {"element_name": "Search", "text": "Python", "window_title": "Browser"},
+        )
+        assert "Введен текст" in res_type
+
+        res_inspect = app._execute_planned_tool(
+            "inspect_ui_elements",
+            {"window_title": "Calc"},
+        )
+        assert "Найдено 1 элементов" in res_inspect
+

@@ -27,8 +27,8 @@ def client() -> LocalLLMClient:
 class TestSystemToolsDefinitions:
     """Тестирование спецификации системных инструментов."""
 
-    def test_all_eight_tools_present(self) -> None:
-        """Проверка наличия ровно 8 требуемых инструментов."""
+    def test_all_system_tools_present(self) -> None:
+        """Проверка наличия всех 11 системных инструментов, включая UI Automation."""
         expected_names = {
             "open_application",
             "open_url",
@@ -38,10 +38,16 @@ class TestSystemToolsDefinitions:
             "click_screen",
             "type_text",
             "inspect_screen",
+            "click_ui_element",
+            "type_into_ui_element",
+            "inspect_ui_elements",
         }
         actual_names = {t["function"]["name"] for t in SYSTEM_TOOLS}
         assert actual_names == expected_names
-        assert len(SYSTEM_TOOLS) == 8
+        assert len(SYSTEM_TOOLS) == 11
+
+    # Алиас для обратной совместимости
+    test_all_eight_tools_present = test_all_system_tools_present
 
     def test_tools_schema_validity(self) -> None:
         """Проверка структуры каждого инструмента по формату OpenAI Tools."""
@@ -284,6 +290,20 @@ class TestFallbackRuleEngineDirect:
 
         plan_vision_type = engine.plan("введи текст привет")
         assert plan_vision_type[0]["tool"] == "type_text"
+
+        plan_uia_click = engine.plan("нажми кнопку Сохранить в окне Блокнот")
+        assert plan_uia_click[0]["tool"] == "click_ui_element"
+        assert plan_uia_click[0]["parameters"]["element_name"] == "Сохранить"
+        assert plan_uia_click[0]["parameters"]["window_title"] == "Блокнот"
+
+        plan_uia_type = engine.plan("введи в поле Поиск текст Привет мир")
+        assert plan_uia_type[0]["tool"] == "type_into_ui_element"
+        assert plan_uia_type[0]["parameters"]["element_name"] == "Поиск"
+        assert plan_uia_type[0]["parameters"]["text"] == "Привет мир"
+
+        plan_uia_toggle = engine.plan("поставь галочку Запомнить меня")
+        assert plan_uia_toggle[0]["tool"] == "click_ui_element"
+        assert plan_uia_toggle[0]["parameters"]["control_type"] == "CheckBox"
 
     def test_engine_respond_phrases(self) -> None:
         """Проверка текстовых ответов резервного движка."""

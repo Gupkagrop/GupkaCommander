@@ -43,6 +43,7 @@ weights/
 # Logs & Diagnostics
 *.log
 logs/
+@AutomationLog.txt
 npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*

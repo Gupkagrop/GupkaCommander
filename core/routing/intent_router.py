@@ -32,6 +32,7 @@ class Intent(StrEnum):
     VOLUME_CONTROL = "volume_control"
     AI_COGNITIVE = "ai_cognitive"
     VISION_INTERACT = "vision_interact"
+    UI_AUTOMATION = "ui_automation"
 
 
 @dataclass(frozen=True)
@@ -150,6 +151,7 @@ class IntentRouter:
             self._match_window_control,
             self._match_run_command,
             self._match_search_web,
+            self._match_ui_automation,
             self._match_vision_interact,
             self._match_open_url,
             self._match_open_app,
@@ -349,6 +351,190 @@ class IntentRouter:
                 return "yandex"
             return "google"
         return "google"
+
+    def _extract_window_context(self, text: str) -> tuple[str, str]:
+        """Извлечение контекста окна ('в окне ...' / 'внутри ...') из запроса.
+
+        Args:
+            text: Исходный текст запроса.
+
+        Returns:
+            Кортеж (очищенная_команда, заголовок_окна).
+        """
+        clean_text = text.strip()
+        prefix_pattern = (
+            r"^(?:в\s+окне|внутри)\s+([^,:;]+?)"
+            r"(?:,\s*|:\s*|-\s*|\s+(?=(?:нажми|кликни|щелкни|введи|напечатай|поставь|сними|убери|отметь)))\s*(.+)$"
+        )
+        prefix_match = re.match(prefix_pattern, clean_text, re.IGNORECASE)
+        if prefix_match:
+            win = prefix_match.group(1).strip().strip("'\"«»")
+            body = prefix_match.group(2).strip()
+            return body, win
+
+        suffix_pattern = r"\s+(?:в\s+окне|внутри)\s+([^,:;]+)$"
+        suffix_match = re.search(suffix_pattern, clean_text, re.IGNORECASE)
+        if suffix_match:
+            win = suffix_match.group(1).strip().strip("'\"«»")
+            body = clean_text[:suffix_match.start()].strip()
+            return body, win
+
+        return clean_text, ""
+
+    def _parse_uia_type_command(self, body: str) -> tuple[str, str] | None:
+        """Распознавание команд ввода текста в элемент интерфейса UI Automation.
+
+        Args:
+            body: Текст команды после отсечения контекста окна.
+
+        Returns:
+            Кортеж (element_name, text) или None.
+        """
+        # Шаблон: «введи в поле <имя> текст <текст>»
+        pat1 = r"^(?:введи|напечатай)\s+в\s+поле\s+(.+?)\s+текст\s+(.+)$"
+        m1 = re.match(pat1, body, re.IGNORECASE)
+        if m1:
+            return m1.group(1).strip().strip("'\"«»"), m1.group(2).strip().strip("'\"«»")
+
+        # Шаблон: «напечатай в <имя> : <текст>» или «введи в <имя> : <текст>»
+        pat2 = r"^(?:введи|напечатай)\s+в\s+(?:поле\s+)?(.+?)\s*:\s*(.+)$"
+        m2 = re.match(pat2, body, re.IGNORECASE)
+        if m2:
+            return m2.group(1).strip().strip("'\"«»"), m2.group(2).strip().strip("'\"«»")
+
+        # Шаблон: «введи в <имя> текст <текст>»
+        pat3 = r"^(?:введи|напечатай)\s+в\s+(.+?)\s+текст\s+(.+)$"
+        m3 = re.match(pat3, body, re.IGNORECASE)
+        if m3:
+            return m3.group(1).strip().strip("'\"«»"), m3.group(2).strip().strip("'\"«»")
+
+        return None
+
+    def _parse_uia_toggle_command(self, body: str) -> tuple[str, str] | None:
+        """Распознавание команд переключения флажков (CheckBox/RadioButton).
+
+        Args:
+            body: Текст команды после отсечения контекста окна.
+
+        Returns:
+            Кортеж (element_name, state_str) или None.
+        """
+        on_pat = r"^(?:поставь|установи|отметь)\s+(?:галочку|чекбокс)\s+(.+)$"
+        m_on = re.match(on_pat, body, re.IGNORECASE)
+        if m_on:
+            return m_on.group(1).strip().strip("'\"«»"), "true"
+
+        off_pat = r"^(?:сними|убери|выключи)\s+(?:галочку|чекбокс)\s+(.+)$"
+        m_off = re.match(off_pat, body, re.IGNORECASE)
+        if m_off:
+            return m_off.group(1).strip().strip("'\"«»"), "false"
+
+        return None
+
+    def _parse_uia_click_command(self, body: str, has_window: bool) -> str | None:
+        """Распознавание команд нажатия кнопок и ссылок UI Automation.
+
+        Args:
+            body: Текст команды после отсечения контекста окна.
+            has_window: Указано ли явно окно в запросе.
+
+        Returns:
+            Имя целевого элемента или None.
+        """
+        # «нажми кнопку <имя>» / «нажми на кнопку <имя>»
+        btn_pat = r"^нажми(?:\s+на)?\s+кнопку\s+(.+)$"
+        m_btn = re.match(btn_pat, body, re.IGNORECASE)
+        if m_btn:
+            return m_btn.group(1).strip().strip("'\"«»")
+
+        # «кликни по <имя>» (если без окна и указано 'по кнопке', отдается в vision)
+        click_by_pat = r"^кликни\s+по\s+(.+)$"
+        m_click_by = re.match(click_by_pat, body, re.IGNORECASE)
+        if m_click_by:
+            target = m_click_by.group(1).strip().strip("'\"«»")
+            if not target.lower().startswith("кнопк") or has_window:
+                return target
+
+        # «щелкни на <имя>» / «щелкни по <имя>»
+        click_on_pat = r"^щелкни\s+(?:на|по)\s+(.+)$"
+        m_click_on = re.match(click_on_pat, body, re.IGNORECASE)
+        if m_click_on:
+            target = m_click_on.group(1).strip().strip("'\"«»")
+            if not target.lower().startswith("кнопк") or has_window:
+                return target
+
+        # Если окно указано явно, допускаются общие формулировки клика
+        if has_window:
+            general_pat = (
+                r"^(?:кликни|нажми|щелкни)(?:\s+(?:на|по))?"
+                r"(?:\s+(?:кнопку|ссылку|элемент))?\s+(.+)$"
+            )
+            m_gen = re.match(general_pat, body, re.IGNORECASE)
+            if m_gen:
+                return m_gen.group(1).strip().strip("'\"«»")
+
+        return None
+
+    def _match_ui_automation(self, raw_query: str, lower_query: str) -> RouteResult | None:
+        """Распознавание команд Microsoft UI Automation для взаимодействия с элементами окон."""
+        # Исключаем команды с явными координатами экрана
+        if re.search(r"(?:координатам\s+)?\d+\s*[, ]\s*\d+", lower_query):
+            return None
+
+        body, window_title = self._extract_window_context(raw_query)
+        has_window = bool(window_title)
+
+        # 1. Проверка команд ввода текста
+        type_res = self._parse_uia_type_command(body)
+        if type_res is not None:
+            elem_name, text_val = type_res
+            return RouteResult(
+                intent=Intent.UI_AUTOMATION,
+                query=raw_query,
+                target=elem_name,
+                params={
+                    "action": "type",
+                    "element_name": elem_name,
+                    "text": text_val,
+                    "window_title": window_title,
+                },
+                matched_rule="ui_automation_type_pattern",
+            )
+
+        # 2. Проверка команд флажков / переключателей
+        toggle_res = self._parse_uia_toggle_command(body)
+        if toggle_res is not None:
+            elem_name, state_val = toggle_res
+            return RouteResult(
+                intent=Intent.UI_AUTOMATION,
+                query=raw_query,
+                target=elem_name,
+                params={
+                    "action": "set_toggle",
+                    "element_name": elem_name,
+                    "text": state_val,
+                    "window_title": window_title,
+                },
+                matched_rule="ui_automation_toggle_pattern",
+            )
+
+        # 3. Проверка команд клика / нажатия кнопок
+        elem_click = self._parse_uia_click_command(body, has_window)
+        if elem_click is not None:
+            return RouteResult(
+                intent=Intent.UI_AUTOMATION,
+                query=raw_query,
+                target=elem_click,
+                params={
+                    "action": "click",
+                    "element_name": elem_click,
+                    "text": "",
+                    "window_title": window_title,
+                },
+                matched_rule="ui_automation_click_pattern",
+            )
+
+        return None
 
     def _match_vision_interact(self, raw_query: str, lower_query: str) -> RouteResult | None:
         """Распознавание команд компьютерного зрения и кликов по экрану."""

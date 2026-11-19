@@ -20,17 +20,18 @@
 - [x] **2026-11-19 Реализация Спринта 4 (Cognitive Brain, Routing & Vision Grounding):** Роем автономных агентов (`router-brain`, `vision-grounding`, `verifier-4`) реализовано когнитивное ядро и координатное зрение: двухуровневый маршрутизатор с Fast-Path First (`IntentRouter`), OpenAI-совместимый клиент `LocalLLMClient` с поддержкой 8 системных инструментов и автономным `FallbackRuleEngine`, модуль захвата экрана `ScreenCapture` (mss + Win32 DPI awareness + dhash) и координатный агент `VisionAgent` с плавным S-curve наведением курсора, верификацией изменения кадра и безопасным прерыванием по Esc. Написано 103 новых теста (всего 287 тестов в проекте), 100% тестов пройдены успешно, 0 ошибок mypy strict и ruff. (Commit: `32794c4`)
 - [x] **2026-11-19 Реализация Спринта 5 (Deployment, Models Setup & Windows Autostart):** Роем автономных агентов (`packager`, `model-fetcher`, `verifier-5`, `monitor-5`) реализованы утилиты дистрибуции и автономного развертывания: скрипт загрузки весов моделей с докачкой (`scripts/download_models.py` для Silero VAD, Piper TTS ru_RU, Whisper и Qwen2.5-VL GGUF), генератор многослойной Fluent Dark иконки `assets/gupka_commander.ico` (`scripts/generate_icon.py`), скрипт создания Windows-ярлыков на Рабочем столе и в автозагрузке (`scripts/create_shortcut.py`), скрипты запуска `llama-server.exe` под NVIDIA RTX 5050 (`scripts/run_llama_server.bat` и `.ps1`) и интеграция локальных путей моделей в ядро и GUI. Написано 44 новых теста (всего 331 тест в проекте), 100% тестов пройдены успешно, 0 ошибок mypy strict и ruff. (Commit: `12bedff`)
 - [x] **2026-11-19 Создание корневых скриптов запуска (1-Click Launchers):** Добавлены файлы быстрого запуска в корень проекта: `start.bat` (запуск в 1 клик с автопроверкой окружения и моделей), `setup.bat` (мастер первоначальной настройки под ключ с созданием ярлыка), `start_quiet.vbs` (тихий запуск в трей без окна консоли) и `start.ps1` (PowerShell скрипт с поддержкой флагов `-Background` и `-Setup`). Написано 4 теста в `tests/test_launch_scripts.py` (всего 335 тестов), 100% green. (Commit: `fb0afb3`)
+- [x] **2026-11-19 Реализация Вектора 1 (Microsoft UI Automation / Tier 1 UIA):** Роем автономных агентов (`uia-engineer`, `router-brain-v1`, `verifier-uia`, `monitor-7`) реализован уровень семантического управления Windows UIA без компьютерного зрения: модуль `core/uia/uia_controller.py` (`UIAutomationManager`) на базе нативного Microsoft UIA с безопасным поиском окон/кнопок/полей за 30-50 мс, поддержка `Intent.UI_AUTOMATION` в `IntentRouter`, регистрация 3 системных инструментов (`click_ui_element`, `type_into_ui_element`, `inspect_ui_elements`) в `LocalLLMClient` и каскадный переход в `GupkaCommanderApp` (Fast-Path -> UIA -> Vision Fallback). Написано 24 новых теста в `tests/test_uia_controller.py` и `tests/test_integration_uia.py` (всего 375 тестов), 100% green, 0 ошибок mypy strict и ruff.
 
 ## 3. Active Task (Current Focus)
-- **Feature:** Все 5 спринтов проекта GupkaCommander полностью реализованы, протестированы (331/331 green) и готовы к работе.
-- **Status:** Проект готов к полноценному повседневному использованию на Windows 11.
+- **Feature:** Вектор 1 (Tier 1 UIA) успешно реализован. Следующий этап: Вектор 2 (Streaming LLM-to-TTS параллельное озвучивание по предложениям).
+- **Status:** 375/375 тестов зелёные, 0 ошибок mypy в 55 исходных файлах.
 - **Verification Plan:** `uv run pytest tests/ -q`, `uv run ruff check .`, `uv run mypy core gui tests scripts main.py`.
 
 ## 4. Next Immediate Steps (Backlog)
-- [x] Разработка утилит развертывания (`scripts/download_models.py`, `scripts/run_llama_server.bat`).
-- [x] Создание ярлыка запуска на Рабочем столе и в автозагрузке Windows (`scripts/create_shortcut.py`).
-- [ ] Опционально: запуск скрипта скачивания моделей `uv run python scripts/download_models.py --voice-only` пользователем.
-- [ ] Запуск приложения `uv run python main.py` для живого взаимодействия.
+- [x] **Вектор 1:** Microsoft UI Automation (Tier 1 UIA) — мгновенный клик и ввод в окнах по именам элементов.
+- [ ] **Вектор 2:** Потоковый синтез речи (Streaming LLM-to-TTS) — озвучивание ответа на лету по предложениям с задержкой < 300 мс.
+- [ ] **Вектор 3:** Долговременная память и база знаний (SQLite / Episodic Memory) — запоминание предпочтений, заметок и истории диалогов.
+- [ ] **Вектор 4:** Сборка автономного инсталлятора Windows (.exe / PyInstaller / Inno Setup) для работы без Python/uv.
 
 ## 5. Architectural Decisions & Blockers
 - **Decisions Log:**

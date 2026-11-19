@@ -243,3 +243,89 @@ class TestIntentRouterComprehensive:
 
         res = custom_router.route("открой telegram")
         assert res.intent == Intent.OPEN_APP
+
+
+class TestUIAutomationRouting:
+    """Модульные тесты для маршрутизации команд Microsoft UI Automation."""
+
+    def test_ui_automation_click_button(self, router: IntentRouter) -> None:
+        """Проверка распознавания команды 'нажми кнопку <имя>'."""
+        res = router.route("нажми кнопку Сохранить")
+        assert res.intent == Intent.UI_AUTOMATION
+        assert res.target == "Сохранить"
+        assert res.params["action"] == "click"
+        assert res.params["element_name"] == "Сохранить"
+        assert res.params["text"] == ""
+        assert res.params["window_title"] == ""
+
+    def test_ui_automation_click_by(self, router: IntentRouter) -> None:
+        """Проверка распознавания команды 'кликни по <имя>'."""
+        res = router.route("кликни по Отмена")
+        assert res.intent == Intent.UI_AUTOMATION
+        assert res.params["action"] == "click"
+        assert res.params["element_name"] == "Отмена"
+
+    def test_ui_automation_click_on(self, router: IntentRouter) -> None:
+        """Проверка распознавания команды 'щелкни на <имя>'."""
+        res = router.route("щелкни на ОК")
+        assert res.intent == Intent.UI_AUTOMATION
+        assert res.params["action"] == "click"
+        assert res.params["element_name"] == "ОК"
+
+    def test_ui_automation_type_field_text(self, router: IntentRouter) -> None:
+        """Проверка распознавания 'введи в поле <имя> текст <текст>'."""
+        res = router.route("введи в поле Поиск текст Привет мир")
+        assert res.intent == Intent.UI_AUTOMATION
+        assert res.params["action"] == "type"
+        assert res.params["element_name"] == "Поиск"
+        assert res.params["text"] == "Привет мир"
+
+    def test_ui_automation_type_colon(self, router: IntentRouter) -> None:
+        """Проверка распознавания 'напечатай в <имя> : <текст>'."""
+        res = router.route("напечатай в Логин : admin")
+        assert res.intent == Intent.UI_AUTOMATION
+        assert res.params["action"] == "type"
+        assert res.params["element_name"] == "Логин"
+        assert res.params["text"] == "admin"
+
+    def test_ui_automation_checkbox_set(self, router: IntentRouter) -> None:
+        """Проверка распознавания 'поставь галочку <имя>'."""
+        res = router.route("поставь галочку Запомнить меня")
+        assert res.intent == Intent.UI_AUTOMATION
+        assert res.params["action"] == "set_toggle"
+        assert res.params["element_name"] == "Запомнить меня"
+        assert res.params["text"] == "true"
+
+    def test_ui_automation_checkbox_unset(self, router: IntentRouter) -> None:
+        """Проверка распознавания 'сними галочку <имя>'."""
+        res = router.route("сними галочку Автосохранение")
+        assert res.intent == Intent.UI_AUTOMATION
+        assert res.params["action"] == "set_toggle"
+        assert res.params["element_name"] == "Автосохранение"
+        assert res.params["text"] == "false"
+
+    def test_ui_automation_with_window_suffix(self, router: IntentRouter) -> None:
+        """Проверка распознавания контекста окна в конце запроса ('в окне ...')."""
+        res = router.route("нажми кнопку Сохранить в окне Блокнот")
+        assert res.intent == Intent.UI_AUTOMATION
+        assert res.params["action"] == "click"
+        assert res.params["element_name"] == "Сохранить"
+        assert res.params["window_title"] == "Блокнот"
+
+    def test_ui_automation_with_window_prefix(self, router: IntentRouter) -> None:
+        """Проверка распознавания контекста окна в начале запроса ('внутри ...')."""
+        res = router.route("внутри Калькулятор щелкни на Ок")
+        assert res.intent == Intent.UI_AUTOMATION
+        assert res.params["action"] == "click"
+        assert res.params["element_name"] == "Ок"
+        assert res.params["window_title"] == "Калькулятор"
+
+    def test_ui_automation_type_with_window(self, router: IntentRouter) -> None:
+        """Проверка ввода текста с указанием окна."""
+        res = router.route("введи в поле Имя текст Денис в окне Профиль")
+        assert res.intent == Intent.UI_AUTOMATION
+        assert res.params["action"] == "type"
+        assert res.params["element_name"] == "Имя"
+        assert res.params["text"] == "Денис"
+        assert res.params["window_title"] == "Профиль"
+
