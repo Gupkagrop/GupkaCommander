@@ -1,11 +1,11 @@
 # Project Operational Guidelines (AGENTS.md)
 
 > [!NOTE]
-> **Назначение файла:** Контракт правил и архитектурных стандартов для агентов в данном проекте.
+> **Назначение файла:** Контракт правил и архитектурных стандартов для агентов в проекте GupkaCommander.
 > Агент считывает этот файл автоматически при открытии рабочей области.
 
 ## 1. Project Overview & Tech Stack
-- **Project Name:** LocalAgent
+- **Project Name:** GupkaCommander
 - **Target Platform:** Windows 11 Desktop (GPU: NVIDIA RTX 5050 Laptop 8GB VRAM, CPU: Intel i5-14450HX, RAM: 16GB)
 - **Stack:** Python 3.12+ / PySide6 (Qt 6 Fluent UI) / Windows Win32 API & UI Automation (UIA)
 - **Voice Stack (CPU):** Silero VAD (ONNX) / Faster-Whisper INT8 (CTranslate2) / Piper TTS (ONNX)

@@ -1,18 +1,19 @@
 # Project Living State Tracker (TASK.md)
 
 > [!NOTE]
-> **Назначение файла:** Живой журнал состояния проекта для сквозной памяти между чатами ("Zero-Context-Amnesia").
+> **Назначение файла:** Живой журнал состояния проекта GupkaCommander для сквозной памяти между чатами ("Zero-Context-Amnesia").
 > Обновляется агентом в конце каждого выполненного этапа или задачи (Stage 4 SOP).
 
 ## 1. Project Health & Stage
 - **Current Phase:** Phase 1: Initial Architecture & Baseline Setup
 - **Status:** In Progress
-- **Last Updated:** 2026-11-19 18:20
+- **Last Updated:** 2026-11-19 18:27
 - **Active Branch:** `main`
 
 ## 2. Completed Milestones
 - [x] **2026-11-19 Исследование и архитектурное проектирование:** Проведен глубокий анализ подходов к автономным Computer-Use агентам (UI-TARS, Qwen2.5-VL, OmniParser v2, Fast-Path). Разработана 4-уровневая архитектура (Fast-Path -> UIA -> Browser Bridge -> Vision Fallback), спроектирован CPU-контур для голоса (VAD + Whisper + Piper) и подготовлены базовые спецификации. (Commit: `26b4609`)
 - [x] **2026-11-19 Глубокий анализ и утверждение идеального стека:** Проведен сравнительный анализ моделей и библиотек под профиль RTX 5050 (8GB VRAM) / i5-14450HX. Утверждена связка: PySide6 (GUI) + Silero VAD/Faster-Whisper/Piper TTS (CPU) + Qwen2.5-VL-3B-Instruct Q4 через llama-server (GPU ~2.6GB VRAM) + Windows Registry/UIA/mss/rapidfuzz. Документ зафиксирован в `docs/architecture/ideal_stack_analysis.md`. (Commit: `077c51c`)
+- [x] **2026-11-19 Ребрендинг в GupkaCommander и оформление репозитория:** Утверждено название проекта GupkaCommander. Сформирован конфигурационный файл `pyproject.toml`, подготовлена эталонная структура каталогов (`core/`, `gui/`, `tests/`), обновлены манифесты и презентационный `README.md`.
 
 ## 3. Active Task (Current Focus)
 - **Feature:** Формирование архитектурной базы и спецификаций без написания кода реализации.
