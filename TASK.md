@@ -5,9 +5,9 @@
 > Обновляется агентом в конце каждого выполненного этапа или задачи (Stage 4 SOP).
 
 ## 1. Project Health & Stage
-- **Current Phase:** Phase 2: Fast-Path Core Implementation (Completed)
-- **Status:** Sprint 1 Done / Ready for Sprint 2
-- **Last Updated:** 2026-11-19 19:46
+- **Current Phase:** Phase 3: Voice Pipeline on CPU (Completed)
+- **Status:** Sprint 2 Done / Ready for Sprint 3 (PySide6 Spotlight Bar GUI)
+- **Last Updated:** 2026-11-19 20:18
 - **Active Branch:** `main`
 
 ## 2. Completed Milestones
@@ -15,23 +15,27 @@
 - [x] **2026-11-19 Глубокий анализ и утверждение идеального стека:** Проведен сравнительный анализ моделей и библиотек под профиль RTX 5050 (8GB VRAM) / i5-14450HX. Утверждена связка: PySide6 (GUI) + Silero VAD/Faster-Whisper/Piper TTS (CPU) + Qwen2.5-VL-3B-Instruct Q4 через llama-server (GPU ~2.6GB VRAM) + Windows Registry/UIA/mss/rapidfuzz. Документ зафиксирован в `docs/architecture/ideal_stack_analysis.md`. (Commit: `077c51c`)
 - [x] **2026-11-19 Ребрендинг в GupkaCommander и оформление репозитория:** Утверждено название проекта GupkaCommander. Сформирован конфигурационный файл `pyproject.toml`, подготовлена эталонная структура каталогов (`core/`, `gui/`, `tests/`), обновлены манифесты и презентационный `README.md`. Репозиторий на GitHub переименован в `Gupkagrop/GupkaCommander`, обновлен git remote origin. (Commit: `3981f4c`)
 - [x] **2026-11-19 Реализация Спринта 1 (Fast-Path Core):** Роем автономных агентов (`app-finder`, `os-controller`, `failsafe`, `verifier`) реализовано ядро автоматизации: сканер реестра/.lnk с rapidfuzz (`core/app_finder.py`), исполнитель веб/шелл/win32 (`core/os_controller.py`), монитор прерываний Esc и Mouse Shake (`core/failsafe.py`). Написаны 74 модульных и интеграционных теста (`tests/`), 100% тестов пройдены успешно, 0 ошибок mypy strict и ruff. (Commit: `252b05e`)
+- [x] **2026-11-19 Реализация Спринта 2 (Voice Pipeline на CPU):** Роем автономных агентов (`audio-vad`, `stt-tts`, `pipeline-orch`, `verifier-2`) реализован полный речевой контур на CPU с нулевым расходом VRAM: захват 16 кГц PCM с кольцевым буфером (`AudioCapture`), Silero VAD v5 с отсечением пауз (`VADDetector`), CTranslate2 Faster-Whisper INT8 (`FasterWhisperTranscriber`), многоуровневый Piper TTS синтез (`PiperSynthesizer`) и оркестратор `VoicePipeline` с мгновенным перебиванием речи (Barge-In). Написаны 50 новых тестов (всего 124 теста в проекте), 100% тестов пройдены успешно, 0 ошибок mypy strict и ruff.
 
 ## 3. Active Task (Current Focus)
-- **Feature:** Завершение Спринта 1 и фиксация изменений в репозитории GitHub.
+- **Feature:** Завершение Спринта 2 и фиксация изменений в репозитории GitHub.
 - **Target Files:**
-  - `[core/app_finder.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/app_finder.py)`
-  - `[core/os_controller.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/os_controller.py)`
-  - `[core/failsafe.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/failsafe.py)`
-  - `[tests/test_app_finder.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_app_finder.py)`
-  - `[tests/test_os_controller.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_os_controller.py)`
-  - `[tests/test_failsafe.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_failsafe.py)`
-  - `[tests/test_integration_fast_path.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_integration_fast_path.py)`
+  - `[core/voice/audio_capture.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/voice/audio_capture.py)`
+  - `[core/voice/vad_detector.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/voice/vad_detector.py)`
+  - `[core/voice/transcriber.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/voice/transcriber.py)`
+  - `[core/voice/synthesizer.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/voice/synthesizer.py)`
+  - `[core/voice/voice_pipeline.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/voice/voice_pipeline.py)`
+  - `[core/voice/__init__.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/voice/__init__.py)`
+  - `[tests/test_audio_capture.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_audio_capture.py)`
+  - `[tests/test_vad_detector.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_vad_detector.py)`
+  - `[tests/test_transcriber.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_transcriber.py)`
+  - `[tests/test_synthesizer.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_synthesizer.py)`
+  - `[tests/test_voice_pipeline.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_voice_pipeline.py)`
 - **Verification Plan:** `uv run pytest tests/ -v`, `uv run ruff check .`, `uv run mypy core tests`.
 
 ## 4. Next Immediate Steps (Backlog)
-- [ ] Спринт 2: Реализация голосового контура на CPU (Silero VAD v5 + Faster-Whisper INT8 + Piper TTS + Barge-In).
 - [ ] Спринт 3: Разработка графического интерфейса Spotlight Bar на PySide6 (Windows 11 Fluent/Mica) и системного трея.
-- [ ] Спринт 4: Подключение локального LLM/VLM инференса и двухуровневого роутера.
+- [ ] Спринт 4: Подключение локального LLM/VLM инференса (Qwen2.5-VL-3B через llama-server) и двухуровневого роутера.
 
 ## 3. Active Task (Current Focus)
 - **Feature:** Формирование архитектурной базы и спецификаций без написания кода реализации.
