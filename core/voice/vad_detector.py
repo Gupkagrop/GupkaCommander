@@ -75,6 +75,7 @@ class VADDetector:
     def _resolve_model_path(self, model_path: str | Path | None) -> Path | None:
         """
         Ищет путь к предобученной ONNX модели Silero VAD.
+        Проверяет сначала путь models/silero_vad.onnx в корне проекта перед обращением к fallback.
         """
         if model_path is not None:
             candidate = Path(model_path)
@@ -84,6 +85,7 @@ class VADDetector:
 
         default_paths = [
             Path("models/silero_vad.onnx"),
+            Path.cwd() / "models" / "silero_vad.onnx",
             Path(__file__).resolve().parent.parent.parent / "models" / "silero_vad.onnx",
         ]
         for path in default_paths:
@@ -92,31 +94,57 @@ class VADDetector:
 
         return None
 
+    def _try_init_torch_hub(self) -> bool:
+        """
+        Попытка загрузки модели Silero VAD через torch.hub при наличии torch.
+        """
+        try:
+            import torch  # type: ignore[import-not-found]
+
+            model, _ = torch.hub.load(
+                repo_or_dir="snakers4/silero-vad",
+                model="silero_vad",
+                onnx=True,
+                trust_repo=True,
+            )
+            if model is not None:
+                logger.info("Silero VAD успешно загружен через torch.hub.")
+                self._using_onnx = True
+                return True
+        except Exception as exc:
+            logger.debug("Загрузка через torch.hub не удалась: %s", exc)
+
+        return False
+
     def _init_session(self) -> None:
         """
-        Инициализирует сессию ONNX Runtime с провайдером CPU.
+        Инициализирует сессию ONNX Runtime с провайдером CPU или fallback.
         """
-        if not _HAS_ORT or self._model_path is None or ort is None:
-            self._using_onnx = False
+        if _HAS_ORT and self._model_path is not None and ort is not None:
+            try:
+                opts = ort.SessionOptions()
+                opts.inter_op_num_threads = 1
+                opts.intra_op_num_threads = 1
+                opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+                self._session = ort.InferenceSession(
+                    str(self._model_path),
+                    sess_options=opts,
+                    providers=["CPUExecutionProvider"],
+                )
+                self._input_names = [i.name for i in self._session.get_inputs()]
+                self._using_onnx = True
+                logger.info("Silero VAD ONNX успешно загружен: %s", self._model_path)
+                return
+            except Exception as exc:
+                logger.warning("Ошибка загрузки Silero VAD ONNX: %s. Проверка fallback.", exc)
+
+        # Fallback 1: попытка загрузки через torch.hub
+        if self._try_init_torch_hub():
             return
 
-        try:
-            opts = ort.SessionOptions()
-            opts.inter_op_num_threads = 1
-            opts.intra_op_num_threads = 1
-            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-
-            self._session = ort.InferenceSession(
-                str(self._model_path),
-                sess_options=opts,
-                providers=["CPUExecutionProvider"],
-            )
-            self._input_names = [i.name for i in self._session.get_inputs()]
-            self._using_onnx = True
-            logger.info("Silero VAD ONNX успешно загружен: %s", self._model_path)
-        except Exception as exc:
-            logger.warning("Ошибка загрузки Silero VAD ONNX: %s. Включен fallback.", exc)
-            self._using_onnx = False
+        # Fallback 2: энергетический анализ (RMS)
+        self._using_onnx = False
 
     def _compute_energy_speech(self, chunk: np.ndarray) -> tuple[float, bool]:
         """
@@ -288,3 +316,8 @@ class VADDetector:
     def using_onnx(self) -> bool:
         """Используется ли нейросетевая модель ONNX."""
         return self._using_onnx
+
+    @property
+    def model_path(self) -> Path | None:
+        """Путь к файлу ONNX модели Silero VAD."""
+        return self._model_path

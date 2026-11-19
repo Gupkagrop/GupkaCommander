@@ -25,13 +25,15 @@ logger = logging.getLogger(__name__)
 class FasterWhisperTranscriber:
     """Транскрибатор речи на базе Faster-Whisper (INT8 CPU) с поддержкой ленивой инициализации."""
 
+    DEFAULT_DOWNLOAD_ROOT = "models/whisper"
+
     def __init__(
         self,
         model_size_or_path: str = "base",
         device: str = "cpu",
         compute_type: str = "int8",
         cpu_threads: int = 4,
-        download_root: str | None = None,
+        download_root: str | None = "models/whisper",
         local_files_only: bool = False,
         model_factory: Callable[..., Any] | None = None,
         fallback_text: str = "",
@@ -43,7 +45,7 @@ class FasterWhisperTranscriber:
             device: Вычислительное устройство (по умолчанию 'cpu').
             compute_type: Тип квантования ('int8' для CPU).
             cpu_threads: Число потоков CPU для вычислений.
-            download_root: Каталог для кэширования загружаемых весов моделей.
+            download_root: Каталог для кэширования загружаемых весов (по умолчанию models/whisper).
             local_files_only: Использовать только локально сохраненные веса без загрузки.
             model_factory: Фабрика создания модели (для внедрения моков и тестирования).
             fallback_text: Текст по умолчанию при работе в резервном (fallback) режиме.
@@ -64,6 +66,11 @@ class FasterWhisperTranscriber:
         self._model: Any | None = None
         self._is_fallback: bool = False
         self._lock: threading.Lock = threading.Lock()
+
+    @property
+    def download_root(self) -> str | None:
+        """Каталог для кэширования загружаемых весов моделей."""
+        return self._download_root
 
     @property
     def is_initialized(self) -> bool:

@@ -67,11 +67,11 @@ def mock_screen_capture() -> MagicMock:
     """Фикстура мока захвата экрана с фиксированным разрешением 1920x1080."""
     capture = MagicMock(spec=ScreenCapture)
     capture.get_screen_size.return_value = (1920, 1080)
-    capture.norm_to_screen.side_effect = (
-        lambda x, y, w, h, n=1000: norm_to_screen(x, y, w, h, norm_max=n)
+    capture.norm_to_screen.side_effect = lambda x, y, w, h, n=1000: norm_to_screen(
+        x, y, w, h, norm_max=n
     )
-    capture.screen_to_norm.side_effect = (
-        lambda x, y, w, h, n=1000: screen_to_norm(x, y, w, h, norm_max=n)
+    capture.screen_to_norm.side_effect = lambda x, y, w, h, n=1000: screen_to_norm(
+        x, y, w, h, norm_max=n
     )
     fake_frame = ScreenFrame(
         width=1920,

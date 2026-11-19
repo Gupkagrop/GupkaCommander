@@ -8,10 +8,11 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, override
 
 from PySide6.QtCore import QEvent, Qt, Signal
-from PySide6.QtGui import QCursor, QKeyEvent
+from PySide6.QtGui import QCursor, QIcon, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -58,11 +59,15 @@ class SpotlightBar(QWidget):
     visibility_changed = Signal(bool)
 
     DEFAULT_WIDTH: int = 680
+    DEFAULT_ICON_PATH: Path = (
+        Path(__file__).resolve().parent.parent / "assets" / "gupka_commander.ico"
+    )
 
     def __init__(
         self,
         parent: QWidget | None = None,
         hide_on_focus_loss: bool = False,
+        icon_path: Path | str | None = None,
     ) -> None:
         """
         Инициализация панели SpotlightBar.
@@ -70,16 +75,18 @@ class SpotlightBar(QWidget):
         Args:
             parent: Родительский виджет.
             hide_on_focus_loss: Автоматически скрывать окно при потере активности.
+            icon_path: Путь к файлу системной иконки окна.
         """
         super().__init__(parent)
         self._hide_on_focus_loss = hide_on_focus_loss
+        self._icon_path = Path(icon_path) if icon_path is not None else self.DEFAULT_ICON_PATH
 
         self._init_window_flags()
         self._init_ui()
         self._apply_styles()
 
     def _init_window_flags(self) -> None:
-        """Настройка флагов окна и прозрачности фона."""
+        """Настройка флагов окна, прозрачности фона и системной иконки."""
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -87,6 +94,8 @@ class SpotlightBar(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setFixedWidth(self.DEFAULT_WIDTH)
+        if self._icon_path.exists():
+            self.setWindowIcon(QIcon(str(self._icon_path)))
 
     def _init_ui(self) -> None:
         """Построение элементов интерфейса окна."""
@@ -193,6 +202,11 @@ class SpotlightBar(QWidget):
     def chat_drawer(self) -> ChatDrawer:
         """Возвращает выдвижную панель истории ChatDrawer."""
         return self._chat_drawer
+
+    @property
+    def icon_path(self) -> Path:
+        """Возвращает путь к системной иконке окна."""
+        return self._icon_path
 
     def set_hide_on_focus_loss(self, enabled: bool) -> None:
         """Включает или выключает автоскрытие при потере фокуса."""

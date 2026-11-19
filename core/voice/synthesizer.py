@@ -34,6 +34,9 @@ class PiperSynthesizer:
     BACKEND_SAPI = "sapi"
     BACKEND_MOCK = "mock"
 
+    DEFAULT_MODEL_PATH = Path("models/piper/ru_RU-dmitri-medium.onnx")
+    DEFAULT_CONFIG_PATH = Path("models/piper/ru_RU-dmitri-medium.onnx.json")
+
     def __init__(
         self,
         model_path: str | Path | None = None,
@@ -55,8 +58,14 @@ class PiperSynthesizer:
             sapi_factory: Фабрика COM-объекта SAPI.SpVoice для Windows.
             use_sapi_fallback: Разрешить ли резервный переход на SAPI5 при отсутствии Piper.
         """
-        self._model_path: Path | None = Path(model_path) if model_path else None
-        self._config_path: Path | None = Path(config_path) if config_path else None
+        self._model_path: Path | None = (
+            Path(model_path) if model_path is not None else self._resolve_default_model_path()
+        )
+        self._config_path: Path | None = (
+            Path(config_path)
+            if config_path is not None
+            else self._resolve_default_config_path(self._model_path)
+        )
         self._sample_rate: int = sample_rate
 
         self._voice_factory: Callable[..., Any] | None = voice_factory
@@ -79,6 +88,46 @@ class PiperSynthesizer:
         self._current_stream: Any | None = None
         self._playback_thread: threading.Thread | None = None
         self._init_lock: threading.Lock = threading.Lock()
+
+    @classmethod
+    def _resolve_default_model_path(cls) -> Path | None:
+        """Проверяет путь models/piper/ru_RU-dmitri-medium.onnx по умолчанию."""
+        candidates = [
+            cls.DEFAULT_MODEL_PATH,
+            Path.cwd() / cls.DEFAULT_MODEL_PATH,
+            Path(__file__).resolve().parent.parent.parent / cls.DEFAULT_MODEL_PATH,
+        ]
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate.resolve()
+        return cls.DEFAULT_MODEL_PATH
+
+    @classmethod
+    def _resolve_default_config_path(cls, model_path: Path | None) -> Path | None:
+        """Проверяет путь к конфигурационному файлу Piper TTS по умолчанию."""
+        if model_path is not None:
+            candidate_json = Path(f"{model_path}.json")
+            if candidate_json.is_file():
+                return candidate_json.resolve()
+        candidates = [
+            cls.DEFAULT_CONFIG_PATH,
+            Path.cwd() / cls.DEFAULT_CONFIG_PATH,
+            Path(__file__).resolve().parent.parent.parent / cls.DEFAULT_CONFIG_PATH,
+        ]
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate.resolve()
+        return cls.DEFAULT_CONFIG_PATH
+
+    @property
+    def model_path(self) -> Path | None:
+        """Путь к файлу ONNX модели Piper TTS."""
+        return self._model_path
+
+    @property
+    def config_path(self) -> Path | None:
+        """Путь к файлу конфигурации Piper TTS."""
+        return self._config_path
 
     @property
     def is_initialized(self) -> bool:

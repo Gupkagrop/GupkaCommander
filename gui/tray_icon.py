@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QAction, QBrush, QColor, QIcon, QPainter, QPen, QPixmap
@@ -44,17 +45,29 @@ class TrayManager(QObject):
     settings_triggered = Signal()
     quit_requested = Signal()
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    DEFAULT_ICON_PATH: Path = (
+        Path(__file__).resolve().parent.parent / "assets" / "gupka_commander.ico"
+    )
+
+    def __init__(
+        self,
+        parent: QObject | None = None,
+        base_icon_path: Path | str | None = None,
+    ) -> None:
         """
         Инициализация диспетчера системного трея.
 
         Args:
             parent: Родительский QObject.
+            base_icon_path: Путь к базовой иконке приложения.
         """
         super().__init__(parent)
 
         self._state: str = "IDLE"
         self._is_muted: bool = False
+        self._base_icon_path = (
+            Path(base_icon_path) if base_icon_path is not None else self.DEFAULT_ICON_PATH
+        )
 
         self._tray_icon = QSystemTrayIcon(self)
         self._menu = QMenu()
@@ -109,20 +122,30 @@ class TrayManager(QObject):
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        # Фоновый диск темного цвета
-        painter.setBrush(QBrush(QColor(PALETTE.surface)))
-        painter.setPen(QPen(QColor(PALETTE.border), 1.5))
-        painter.drawEllipse(2, 2, 28, 28)
+        if self._base_icon_path.exists():
+            base_icon = QIcon(str(self._base_icon_path))
+            base_pixmap = base_icon.pixmap(28, 28)
+            painter.drawPixmap(2, 2, base_pixmap)
 
-        # Внутренний цветной индикатор статуса
-        painter.setBrush(QBrush(QColor(color_hex)))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(9, 9, 14, 14)
+            # Цветной индикатор статуса в правом нижнем углу иконки
+            painter.setBrush(QBrush(QColor(color_hex)))
+            painter.setPen(QPen(QColor(PALETTE.background), 1.5))
+            painter.drawEllipse(20, 20, 10, 10)
+        else:
+            # Фоновый диск темного цвета (fallback при отсутствии файла иконки)
+            painter.setBrush(QBrush(QColor(PALETTE.surface)))
+            painter.setPen(QPen(QColor(PALETTE.border), 1.5))
+            painter.drawEllipse(2, 2, 28, 28)
+
+            # Внутренний цветной индикатор статуса
+            painter.setBrush(QBrush(QColor(color_hex)))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(9, 9, 14, 14)
 
         # Если микрофон заглушен, рисуем диагональную красную черту
         if self._is_muted:
             painter.setPen(QPen(QColor(PALETTE.error), 2.5))
-            painter.drawLine(8, 8, 24, 24)
+            painter.drawLine(6, 6, 26, 26)
 
         painter.end()
         return QIcon(pixmap)
@@ -210,6 +233,11 @@ class TrayManager(QObject):
     def quit_action(self) -> QAction:
         """Возвращает действие меню Выход."""
         return self._quit_action
+
+    @property
+    def base_icon_path(self) -> Path:
+        """Возвращает путь к базовой иконке трея."""
+        return self._base_icon_path
 
     def set_state(self, state: str | PipelineState) -> None:
         """

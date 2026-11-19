@@ -32,6 +32,7 @@ def test_transcriber_initial_properties() -> None:
     assert transcriber.model_size_or_path == "small"
     assert transcriber.device == "cpu"
     assert transcriber.compute_type == "int8"
+    assert transcriber.download_root == "models/whisper"
 
 
 def test_transcriber_lazy_initialization_explicit() -> None:
@@ -56,6 +57,7 @@ def test_transcriber_lazy_initialization_explicit() -> None:
         compute_type="int8",
         cpu_threads=4,
         local_files_only=False,
+        download_root="models/whisper",
     )
 
     # Повторный вызов initialize не должен перезагружать модель
