@@ -312,3 +312,56 @@ class TestFallbackRuleEngineDirect:
         assert "youtube" in engine.respond("найди в youtube rock")
         assert "Привет" in engine.respond("добрый день")
         assert "недоступен" in engine.respond("какой смысл жизни?")
+
+
+class TestLocalLLMClientStreaming:
+    """Тестирование потоковой генерации через Server-Sent Events (SSE)."""
+
+    def test_generate_response_stream_success_sse(self, client: LocalLLMClient) -> None:
+        """Проверка успешного парсинга потоковых чанков SSE и маркера [DONE]."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.iter_lines.return_value = [
+            'data: {"choices": [{"delta": {"content": "Привет, "}}]}',
+            "",
+            'data: {"choices": [{"delta": {"content": "Денис!"}}]}',
+            "data: [DONE]",
+        ]
+
+        with patch.object(client.session, "post", return_value=mock_resp) as mock_post:
+            chunks = list(client.generate_response_stream("Привет"))
+            assert chunks == ["Привет, ", "Денис!"]
+            mock_post.assert_called_once()
+            _, kwargs = mock_post.call_args
+            assert kwargs.get("stream") is True
+            assert kwargs["json"]["stream"] is True
+
+    def test_generate_response_stream_fallback_on_network_error(
+        self, client: LocalLLMClient
+    ) -> None:
+        """Проверка перехода на FallbackRuleEngine при сетевой ошибке запроса."""
+        with patch.object(
+            client.session,
+            "post",
+            side_effect=requests.RequestException("Connection refused"),
+        ):
+            chunks = list(client.generate_response_stream("привет"))
+            assert len(chunks) > 0
+            full_text = "".join(chunks)
+            assert "Привет" in full_text
+
+    def test_generate_response_stream_fallback_on_status_500(self, client: LocalLLMClient) -> None:
+        """Проверка перехода на FallbackRuleEngine при HTTP 500 от сервера."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+
+        with patch.object(client.session, "post", return_value=mock_resp):
+            chunks = list(client.generate_response_stream("открой telegram"))
+            assert len(chunks) > 0
+            full_text = "".join(chunks)
+            assert "telegram" in full_text
+
+    def test_generate_response_stream_empty_input(self, client: LocalLLMClient) -> None:
+        """Проверка передачи пустого запроса (возврат пустого итератора)."""
+        chunks = list(client.generate_response_stream("   "))
+        assert chunks == []

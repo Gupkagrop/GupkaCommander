@@ -9,9 +9,10 @@
 from __future__ import annotations
 
 import logging
+import queue
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,8 @@ class PiperSynthesizer:
         self._stream_lock: threading.Lock = threading.Lock()
         self._current_stream: Any | None = None
         self._playback_thread: threading.Thread | None = None
+        self._producer_thread: threading.Thread | None = None
+        self._sentence_queue: queue.Queue[str | None] | None = None
         self._init_lock: threading.Lock = threading.Lock()
 
     @classmethod
@@ -229,6 +232,18 @@ class PiperSynthesizer:
         """Мгновенная остановка воспроизведения и генерации речи (Barge-In)."""
         self._stop_event.set()
 
+        # 0. Аварийный сброс очереди предложений потокового синтеза
+        if self._sentence_queue is not None:
+            try:
+                while not self._sentence_queue.empty():
+                    self._sentence_queue.get_nowait()
+            except Exception:
+                pass
+            try:
+                self._sentence_queue.put_nowait(None)
+            except Exception:
+                pass
+
         # 1. Аварийный сброс активного аудиопотока sounddevice
         with self._stream_lock:
             if self._current_stream is not None:
@@ -253,6 +268,12 @@ class PiperSynthesizer:
         if t is not None and t.is_alive() and t is not threading.current_thread():
             t.join(timeout=0.3)
         self._playback_thread = None
+
+        # Ожидаем завершения потока продюсера очереди
+        p = self._producer_thread
+        if p is not None and p.is_alive() and p is not threading.current_thread():
+            p.join(timeout=0.3)
+        self._producer_thread = None
 
     def speak(self, text: str, blocking: bool = False) -> None:
         """Произносит заданный текст.
@@ -286,16 +307,105 @@ class PiperSynthesizer:
         )
         self._playback_thread.start()
 
+    def speak_stream(
+        self,
+        sentence_iterator: Iterator[str],
+        blocking: bool = False,
+    ) -> None:
+        """Последовательный потоковый синтез и воспроизведение предложений из итератора.
+
+        Args:
+            sentence_iterator: Итератор законченных предложений.
+            blocking: Ожидать ли полного воспроизведения всех предложений перед возвратом.
+        """
+        # Если уже что-то воспроизводится — прерываем предыдущую речь
+        if self.is_speaking():
+            self.stop()
+
+        if not self.is_initialized:
+            self.initialize()
+
+        self._stop_event.clear()
+        sentence_queue: queue.Queue[str | None] = queue.Queue()
+        self._sentence_queue = sentence_queue
+        producer_done = threading.Event()
+
+        def _producer() -> None:
+            try:
+                for sentence in sentence_iterator:
+                    if self._stop_event.is_set():
+                        break
+                    clean_sentence = sentence.strip() if sentence else ""
+                    if clean_sentence:
+                        sentence_queue.put(clean_sentence)
+            except Exception as exc:
+                logger.error("Ошибка при чтении из потока предложений: %s", exc)
+            finally:
+                producer_done.set()
+                sentence_queue.put(None)
+
+        def _consumer() -> None:
+            self._is_speaking = True
+            try:
+                while not self._stop_event.is_set():
+                    try:
+                        item = sentence_queue.get(timeout=0.05)
+                    except queue.Empty:
+                        if producer_done.is_set() and sentence_queue.empty():
+                            break
+                        continue
+
+                    if item is None or self._stop_event.is_set():
+                        break
+
+                    clean_text = item.strip()
+                    if clean_text and not self._stop_event.is_set():
+                        try:
+                            self._play_sentence(clean_text)
+                        except Exception as exc:
+                            logger.error(
+                                "Ошибка при воспроизведении предложения (%s): %s",
+                                self._backend,
+                                exc,
+                            )
+            finally:
+                self._is_speaking = False
+                with self._stream_lock:
+                    self._current_stream = None
+
+        self._producer_thread = threading.Thread(
+            target=_producer,
+            name="PiperSynthesizerProducer",
+            daemon=True,
+        )
+        self._playback_thread = threading.Thread(
+            target=_consumer,
+            name="PiperSynthesizerConsumer",
+            daemon=True,
+        )
+
+        self._producer_thread.start()
+        self._playback_thread.start()
+
+        if blocking:
+            self._playback_thread.join()
+            if self._producer_thread.is_alive():
+                self._producer_thread.join(timeout=0.5)
+
+    def _play_sentence(self, text: str) -> None:
+        """Синтез и вывод одного предложения в активный бэкенд."""
+        if self._backend == self.BACKEND_PIPER:
+            self._play_piper(text)
+        elif self._backend == self.BACKEND_SAPI:
+            self._play_sapi(text)
+        else:
+            self._play_mock(text)
+
     def _run_playback(self, text: str) -> None:
-        """Потоковая процедура озвучивания."""
+        """Потоковая процедура озвучивания одиночного фрагмента."""
         self._is_speaking = True
         try:
-            if self._backend == self.BACKEND_PIPER:
-                self._play_piper(text)
-            elif self._backend == self.BACKEND_SAPI:
-                self._play_sapi(text)
-            else:
-                self._play_mock(text)
+            self._play_sentence(text)
         except Exception as exc:
             logger.error("Ошибка при воспроизведении речи (%s): %s", self._backend, exc)
         finally:

@@ -232,3 +232,97 @@ def test_synthesizer_interrupts_previous_phrase_on_new_speak() -> None:
 
     synth.stop()
     assert not synth.is_speaking()
+
+
+def test_synthesizer_speak_stream_sequential() -> None:
+    """Проверка последовательного потокового воспроизведения предложений из итератора."""
+    mock_voice = MagicMock()
+    mock_voice.sample_rate = 22050
+    synthesized_texts: list[str] = []
+
+    def mock_synth(text: str) -> Any:
+        synthesized_texts.append(text)
+        yield MockAudioChunk(np.ones(1024, dtype=np.float32))
+
+    mock_voice.synthesize = mock_synth
+
+    created_streams: list[MockOutputStream] = []
+
+    def stream_factory(*args: Any, **kwargs: Any) -> MockOutputStream:
+        stream = MockOutputStream(*args, **kwargs)
+        created_streams.append(stream)
+        return stream
+
+    synth = PiperSynthesizer(
+        voice_factory=lambda *a, **kw: mock_voice,
+        output_stream_factory=stream_factory,
+    )
+
+    sentences = ["Первое предложение.", "Второе предложение.", "Третье предложение."]
+    synth.speak_stream(iter(sentences), blocking=True)
+
+    assert synthesized_texts == sentences
+    assert len(created_streams) == 3
+    for s in created_streams:
+        assert s.closed
+        assert len(s.written_blocks) == 1
+    assert not synth.is_speaking()
+
+
+def test_synthesizer_speak_stream_barge_in_clears_queue_and_aborts() -> None:
+    """Проверка мгновенной очистки очереди и прерывания sounddevice при Barge-In в speak_stream."""
+    mock_voice = MagicMock()
+    mock_voice.sample_rate = 22050
+    synthesized_texts: list[str] = []
+
+    def slow_synth(text: str) -> Any:
+        synthesized_texts.append(text)
+        for _ in range(5):
+            time.sleep(0.04)
+            yield MockAudioChunk(np.ones(2048, dtype=np.float32))
+
+    mock_voice.synthesize = slow_synth
+
+    created_streams: list[MockOutputStream] = []
+
+    def stream_factory(*args: Any, **kwargs: Any) -> MockOutputStream:
+        stream = MockOutputStream(*args, **kwargs)
+        created_streams.append(stream)
+        return stream
+
+    synth = PiperSynthesizer(
+        voice_factory=lambda *a, **kw: mock_voice,
+        output_stream_factory=stream_factory,
+    )
+
+    sentences = [
+        "Очень длинное первое предложение.",
+        "Второе предложение, которое не должно воспроизводиться.",
+        "Третье предложение в очереди.",
+    ]
+
+    synth.speak_stream(iter(sentences), blocking=False)
+    time.sleep(0.03)
+    assert synth.is_speaking()
+
+    # Barge-In: прерываем воспроизведение
+    synth.stop()
+
+    assert not synth.is_speaking()
+    # Первое предложение начало воспроизводиться и было прервано
+    assert len(created_streams) == 1
+    assert created_streams[0].aborted
+
+    # Второе и третье предложения не должны были пойти в синтез
+    assert "Второе предложение, которое не должно воспроизводиться." not in synthesized_texts
+    assert "Третье предложение в очереди." not in synthesized_texts
+
+
+def test_synthesizer_speak_stream_empty_iterator() -> None:
+    """Проверка корректной обработки пустого итератора предложений."""
+    mock_voice = MagicMock()
+    synth = PiperSynthesizer(voice_factory=lambda *a, **kw: mock_voice)
+
+    synth.speak_stream(iter([]), blocking=True)
+    assert not synth.is_speaking()
+    mock_voice.synthesize.assert_not_called()

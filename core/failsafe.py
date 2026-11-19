@@ -59,6 +59,10 @@ class FailSafeMonitor:
         """Проверяет, взведен ли флаг аварийного прерывания."""
         return self.abort_event.is_set()
 
+    def is_interrupted(self) -> bool:
+        """Проверяет, взведен ли флаг аварийного прерывания (алиас к is_aborted)."""
+        return self.is_aborted()
+
     def reset_abort(self) -> None:
         """Сбрасывает флаг прерывания и историю перемещений мыши."""
         with self._lock:
@@ -158,6 +162,11 @@ def get_failsafe_monitor() -> FailSafeMonitor:
 def is_aborted() -> bool:
     """Проверяет статус глобального аварийного флага."""
     return default_monitor.is_aborted()
+
+
+def is_interrupted() -> bool:
+    """Проверяет статус глобального аварийного флага (алиас к is_aborted)."""
+    return default_monitor.is_interrupted()
 
 
 def reset_abort() -> None:

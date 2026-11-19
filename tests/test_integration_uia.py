@@ -283,9 +283,7 @@ class TestAppUIACascadeIntegration:
         mock_uia.set_toggle_state.return_value = True
 
         resp = app.execute_command("поставь галочку Автосохранение")
-        mock_uia.set_toggle_state.assert_called_once_with(
-            "Автосохранение", True, window_title=None
-        )
+        mock_uia.set_toggle_state.assert_called_once_with("Автосохранение", True, window_title=None)
         assert "Автосохранение" in resp
         assert "включен" in resp.lower() or "переключен" in resp.lower()
 

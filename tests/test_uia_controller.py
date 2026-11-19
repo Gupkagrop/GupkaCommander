@@ -444,19 +444,13 @@ class TestUIAutomationManagerUnit:
         manager = UIAutomationManager(auto_module=mock_auto)
 
         # Несуществующее окно
+        assert manager.click_element("Кнопка", window_title="НесуществующееОкно12345") is False
         assert (
-            manager.click_element("Кнопка", window_title="НесуществующееОкно12345") is False
-        )
-        assert (
-            manager.type_into_element(
-                "Поле", "текст", window_title="НесуществующееОкно12345"
-            )
+            manager.type_into_element("Поле", "текст", window_title="НесуществующееОкно12345")
             is False
         )
         assert (
-            manager.set_toggle_state(
-                "Флажок", True, window_title="НесуществующееОкно12345"
-            )
+            manager.set_toggle_state("Флажок", True, window_title="НесуществующееОкно12345")
             is False
         )
         assert manager.inspect_window_elements(window_title="НесуществующееОкно12345") == []
@@ -464,16 +458,11 @@ class TestUIAutomationManagerUnit:
         # Несуществующий элемент в существующем окне
         assert manager.click_element("НесуществующаяКнопка", window_title="Блокнот") is False
         assert (
-            manager.type_into_element(
-                "НесуществующееПоле", "текст", window_title="Блокнот"
-            )
+            manager.type_into_element("НесуществующееПоле", "текст", window_title="Блокнот")
             is False
         )
         assert (
-            manager.set_toggle_state(
-                "НесуществующийЧекбокс", True, window_title="Блокнот"
-            )
-            is False
+            manager.set_toggle_state("НесуществующийЧекбокс", True, window_title="Блокнот") is False
         )
 
     def test_failsafe_interruption(self, mock_tree: tuple[Any, Any, Any]) -> None:

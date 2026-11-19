@@ -376,7 +376,7 @@ class IntentRouter:
         suffix_match = re.search(suffix_pattern, clean_text, re.IGNORECASE)
         if suffix_match:
             win = suffix_match.group(1).strip().strip("'\"«»")
-            body = clean_text[:suffix_match.start()].strip()
+            body = clean_text[: suffix_match.start()].strip()
             return body, win
 
         return clean_text, ""

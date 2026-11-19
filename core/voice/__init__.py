@@ -2,11 +2,12 @@
 > [!NOTE]
 > Пакет core.voice: Подсистема голосового взаимодействия GupkaCommander.
 > Экспортирует модули захвата звука (AudioCapture), детекции речи (VADDetector),
-> распознавания (FasterWhisperTranscriber), синтеза (PiperSynthesizer)
-> и сквозной голосовой конвейер (VoicePipeline, PipelineState).
+> распознавания (FasterWhisperTranscriber), синтеза (PiperSynthesizer),
+> разделения предложений (SentenceAccumulator) и сквозной конвейер (VoicePipeline).
 """
 
 from core.voice.audio_capture import AudioCapture
+from core.voice.sentence_streamer import SentenceAccumulator
 from core.voice.synthesizer import PiperSynthesizer
 from core.voice.transcriber import FasterWhisperTranscriber
 from core.voice.vad_detector import VADDetector
@@ -17,6 +18,7 @@ __all__ = [
     "FasterWhisperTranscriber",
     "PiperSynthesizer",
     "PipelineState",
+    "SentenceAccumulator",
     "VADDetector",
     "VoicePipeline",
 ]

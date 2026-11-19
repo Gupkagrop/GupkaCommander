@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+from collections.abc import Iterator
 from typing import Any
 
 import requests
@@ -457,22 +459,19 @@ class LocalLLMClient:
         except requests.RequestException:
             return False
 
-    def generate_response(self, prompt: str) -> str:
+    def generate_response(self, prompt: str, system_prompt: str | None = None) -> str:
         """Генерация текстового ответа на запрос пользователя.
 
         При недоступности сервера переключается на FallbackRuleEngine.
         """
+        sys_prompt = system_prompt or (
+            "Ты автономный оператор Windows 11 GupkaCommander. Отвечай кратко на русском языке."
+        )
         url = f"{self.api_base}/chat/completions"
         payload: dict[str, Any] = {
             "model": self.model_name,
             "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "Ты автономный оператор Windows 11 GupkaCommander. "
-                        "Отвечай кратко на русском языке."
-                    ),
-                },
+                {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.3,
@@ -492,6 +491,106 @@ class LocalLLMClient:
             logger.warning("Локальный LLM недоступен (%s). Переключение на fallback.", err)
 
         return self.fallback_engine.respond(prompt)
+
+    def _parse_sse_line(self, raw_line: str | bytes) -> tuple[str | None, bool]:
+        """Парсинг отдельной строки Server-Sent Events (SSE).
+
+        Returns:
+            tuple[str | None, bool]: (текстовый фрагмент дельты, флаг окончания [DONE]).
+        """
+        line = raw_line if isinstance(raw_line, str) else raw_line.decode("utf-8")
+        line = line.strip()
+        if not line or not line.startswith("data:"):
+            return None, False
+
+        data_str = line[5:].strip()
+        if data_str == "[DONE]":
+            return None, True
+
+        try:
+            data_json: dict[str, Any] = json.loads(data_str)
+            choices: list[dict[str, Any]] = data_json.get("choices", [])
+            if not choices:
+                return None, False
+            delta: dict[str, Any] = choices[0].get("delta", {})
+            content: str = delta.get("content", "")
+            return (content if content else None), False
+        except (json.JSONDecodeError, TypeError, KeyError):
+            return None, False
+
+    def _read_sse_stream(self, resp: requests.Response) -> Iterator[str]:
+        """Построчное чтение и распаковка текстовых чанков из ответа SSE."""
+        for raw_line in resp.iter_lines(decode_unicode=True):
+            if not raw_line:
+                continue
+            chunk, is_done = self._parse_sse_line(raw_line)
+            if is_done:
+                break
+            if chunk is not None:
+                yield chunk
+
+    def _fallback_stream(self, text: str) -> Iterator[str]:
+        """Генерация потока токенов из запасного ответа движка правил."""
+        response = self.fallback_engine.respond(text)
+        tokens = re.findall(r"\S+\s*", response)
+        yield from tokens
+
+    def generate_response_stream(
+        self,
+        user_text: str,
+        system_prompt: str | None = None,
+    ) -> Iterator[str]:
+        """Потоковая генерация ответа через Server-Sent Events (SSE).
+
+        При ошибке или недоступности сервера переключается на FallbackRuleEngine.
+
+        Args:
+            user_text: Текст запроса пользователя.
+            system_prompt: Опциональный системный промпт.
+
+        Yields:
+            str: Текстовые токены ответа по мере их генерации.
+        """
+        clean_text = user_text.strip()
+        if not clean_text:
+            return
+
+        sys_prompt = system_prompt or (
+            "Ты автономный оператор Windows 11 GupkaCommander. Отвечай кратко на русском языке."
+        )
+        url = f"{self.api_base}/chat/completions"
+        payload: dict[str, Any] = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": clean_text},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 512,
+            "stream": True,
+        }
+
+        streamed = False
+        try:
+            resp = self.session.post(
+                url,
+                json=payload,
+                timeout=self.timeout_seconds,
+                stream=True,
+            )
+            if resp.status_code == 200:
+                for chunk in self._read_sse_stream(resp):
+                    streamed = True
+                    yield chunk
+                if streamed:
+                    return
+        except requests.RequestException as err:
+            logger.warning("Ошибка потокового LLM запроса (%s). Запуск fallback.", err)
+        except Exception as exc:
+            logger.warning("Сбой потокового ответа LLM (%s). Запуск fallback.", exc)
+
+        if not streamed:
+            yield from self._fallback_stream(clean_text)
 
     def plan_actions(
         self,

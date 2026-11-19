@@ -13,8 +13,10 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import queue
 import subprocess
 import sys
+from collections.abc import Iterator
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal
@@ -22,10 +24,12 @@ from PySide6.QtWidgets import QApplication
 
 from core.app_finder import AppFinder
 from core.brain.llm_client import LocalLLMClient
+from core.failsafe import FailSafeMonitor, get_failsafe_monitor
 from core.os_controller import DangerousCommandError, OSController
 from core.routing.intent_router import Intent, IntentRouter, RouteResult
 from core.uia import UIAutomationManager
 from core.vision.vision_agent import ActionFailedError, VisionAgent
+from core.voice.sentence_streamer import SentenceAccumulator
 from core.voice.voice_pipeline import PipelineState, VoicePipeline
 from gui.hotkey_manager import HotkeyManager
 from gui.spotlight_bar import SpotlightBar
@@ -76,6 +80,7 @@ class GupkaCommanderApp(QObject):
         llm_client: LocalLLMClient | None = None,
         vision_agent: VisionAgent | None = None,
         uia_manager: UIAutomationManager | None = None,
+        failsafe_monitor: FailSafeMonitor | None = None,
         enable_voice: bool = True,
         enable_hotkey: bool = True,
         enable_tray: bool = True,
@@ -95,6 +100,7 @@ class GupkaCommanderApp(QObject):
             llm_client: Клиент взаимодействия с локальной LLM/VLM.
             vision_agent: Агент визуального взаимодействия с экраном.
             uia_manager: Менеджер Microsoft UI Automation.
+            failsafe_monitor: Монитор безопасности FailSafe для прерывания операций по Esc.
             enable_voice: Флаг активации голосового конвейера.
             enable_hotkey: Флаг активации глобального хоткея Alt+Space.
             enable_tray: Флаг отображения системного трея.
@@ -115,6 +121,9 @@ class GupkaCommanderApp(QObject):
         self.llm_client = llm_client or LocalLLMClient(router=self.intent_router)
         self.vision_agent = vision_agent or VisionAgent()
         self.uia_manager = uia_manager or UIAutomationManager()
+        self.failsafe_monitor = failsafe_monitor or get_failsafe_monitor()
+        self._current_response_streamed: bool = False
+        self._audio_streamed: bool = False
         self.voice_bridge = VoiceBridge()
 
         # 3. Голосовой конвейер
@@ -204,31 +213,43 @@ class GupkaCommanderApp(QObject):
         self.spotlight_bar.add_chat_message("user", clean_text, status="done")
         self.spotlight_bar.clear_input()
 
+        self._current_response_streamed = False
+        self._audio_streamed = False
+
         try:
             # Выполняем команду через маршрутизатор и исполнители
             response_text = self._dispatch_command(clean_text)
         except InterruptedError:
             logger.warning("Исполнение команды прервано пользователем (FailSafe).")
             response_text = "Операция экстренно прервана пользователем (FailSafe)."
+            self._current_response_streamed = False
+            self._audio_streamed = True
         except DangerousCommandError as exc:
             logger.warning("Попытка выполнения небезопасной команды: %s", exc)
             response_text = f"Команда заблокирована системой безопасности: {exc}"
+            self._current_response_streamed = False
         except ActionFailedError as exc:
             logger.warning("Действие интерфейса не удалось: %s", exc)
             response_text = f"Не удалось выполнить визуальное действие: {exc}"
+            self._current_response_streamed = False
         except Exception as exc:
             logger.error("Ошибка при обработке команды '%s': %s", clean_text, exc)
             response_text = f"Произошла ошибка при выполнении: {exc}"
+            self._current_response_streamed = False
 
-        # Добавляем ответ ассистента в историю
-        self.spotlight_bar.add_chat_message("assistant", response_text, status="done")
+        # Добавляем ответ ассистента в историю, если он не был добавлен потоком
+        if not self._current_response_streamed:
+            self.spotlight_bar.add_chat_message("assistant", response_text, status="done")
 
-        # Озвучиваем ответ, если голосовой вывод доступен и микрофон/звук не заглушен
-        if self.enable_voice and not self.tray_manager.is_muted():
+        # Озвучиваем ответ через TTS, если не было потокового воспроизведения
+        if not self._audio_streamed and self.enable_voice and not self.tray_manager.is_muted():
             try:
                 self.voice_pipeline.speak(response_text, blocking=False)
             except Exception as exc:
                 logger.warning("Ошибка при воспроизведении ответа через TTS: %s", exc)
+
+        self._current_response_streamed = False
+        self._audio_streamed = False
 
         return response_text
 
@@ -475,17 +496,92 @@ class GupkaCommanderApp(QObject):
             logger.warning("Ошибка при визуальном клике VisionAgent: %s", exc)
             return f"Элемент '{elem_name}' нажат через визуальный fallback."
 
+    def _setup_stream_card(self) -> Any | None:
+        """Создает карточку ассистента в ChatDrawer для отображения живой печати."""
+        drawer = getattr(self.spotlight_bar, "chat_drawer", None)
+        if callable(drawer):
+            drawer = drawer()
+
+        if drawer is None or not hasattr(drawer, "add_message"):
+            return None
+
+        card = drawer.add_message("assistant", "", status="running")
+        if hasattr(drawer, "is_expanded") and not drawer.is_expanded():
+            if hasattr(drawer, "toggle"):
+                drawer.toggle(expand=True)
+        return card
+
+    def _stream_cognitive_response(self, text: str) -> str:
+        """Потоковая генерация ответа через LLM с озвучиванием и живой печатью."""
+        card = self._setup_stream_card()
+        accumulator = SentenceAccumulator()
+        sentence_queue: queue.Queue[str | None] = queue.Queue()
+
+        def _queue_iter() -> Iterator[str]:
+            while True:
+                item = sentence_queue.get()
+                if item is None:
+                    break
+                yield item
+
+        synthesizer = getattr(self.voice_pipeline, "synthesizer", None)
+        can_speak = (
+            self.enable_voice
+            and not self.tray_manager.is_muted()
+            and synthesizer is not None
+            and hasattr(synthesizer, "speak_stream")
+        )
+        if can_speak and synthesizer is not None:
+            synthesizer.speak_stream(_queue_iter())
+            self._audio_streamed = True
+
+        tokens: list[str] = []
+        try:
+            for chunk in self.llm_client.generate_response_stream(text):
+                if self.failsafe_monitor.is_interrupted():
+                    if synthesizer is not None and hasattr(synthesizer, "stop"):
+                        synthesizer.stop()
+                    if card is not None and hasattr(card, "set_status"):
+                        card.set_status("error")
+                    raise InterruptedError("Операция экстренно прервана пользователем (FailSafe).")
+
+                tokens.append(chunk)
+                if card is not None and hasattr(card, "set_text"):
+                    card.set_text("".join(tokens))
+                    app_inst = QApplication.instance()
+                    if app_inst is not None:
+                        app_inst.processEvents()
+
+                for sentence in accumulator.feed(chunk):
+                    if can_speak:
+                        sentence_queue.put(sentence)
+
+            tail = accumulator.flush()
+            if tail and can_speak:
+                sentence_queue.put(tail)
+        finally:
+            if can_speak:
+                sentence_queue.put(None)
+
+        full_text = "".join(tokens).strip()
+        if card is not None:
+            if hasattr(card, "set_status"):
+                card.set_status("done")
+            self._current_response_streamed = True
+
+        return full_text
+
     def _handle_ai_cognitive(self, text: str) -> str:
         """Обработка свободного запроса через локальную модель LLM (планирование/ответ)."""
         if self.llm_client.is_healthy():
             actions = self.llm_client.plan_actions(text)
             if actions:
                 return self._execute_planned_actions(actions)
-            return self.llm_client.generate_response(text)
+            return self._stream_cognitive_response(text)
 
         lower = text.strip().lower()
         if any(w in lower for w in ("привет", "здравствуй", "добрый день")):
-            return self.llm_client.fallback_engine.respond(text)
+            return self._stream_cognitive_response(text)
 
         self.os_controller.search(text)
         return f"Команда не найдена локально. Выполняю поиск в сети: {text}"
@@ -576,9 +672,7 @@ class GupkaCommanderApp(QObject):
             elem_name = str(params.get("element_name", ""))
             text_val = str(params.get("text", ""))
             win_title = str(params.get("window_title", "")) or None
-            if self.uia_manager.type_into_element(
-                elem_name, text_val, window_title=win_title
-            ):
+            if self.uia_manager.type_into_element(elem_name, text_val, window_title=win_title):
                 target_str = f"'{elem_name}'" + (f" в окне '{win_title}'" if win_title else "")
                 return f"Введен текст '{text_val}' в элемент {target_str}."
 

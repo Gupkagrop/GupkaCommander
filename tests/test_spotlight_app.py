@@ -21,6 +21,8 @@ from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication
 
 from core.app_finder import AppFinder, AppInfo
+from core.brain.llm_client import LocalLLMClient
+from core.failsafe import FailSafeMonitor
 from core.os_controller import OSController
 from core.uia import UIAutomationManager
 from core.vision.vision_agent import VisionAgent
@@ -403,3 +405,68 @@ class TestGupkaCommanderAppUIAutomation:
         )
         assert "Найдено 1 элементов" in res_inspect
 
+
+class TestGupkaCommanderAppStreamingCognitive:
+    """Тестирование потоковой интеграции когнитивного ядра и TTS в GupkaCommanderApp."""
+
+    def test_execute_command_ai_cognitive_streaming(self, qapp: QApplication) -> None:
+        """Проверка потоковой генерации токенов, обновления ChatDrawer и вызова speak_stream."""
+        mock_llm = MagicMock(spec=LocalLLMClient)
+        mock_llm.is_healthy.return_value = True
+        mock_llm.plan_actions.return_value = []
+        mock_llm.generate_response_stream.return_value = iter(
+            ["Привет, ", "Денис! ", "Готов помочь."]
+        )
+
+        mock_synth = MagicMock()
+        mock_pipeline = MagicMock(spec=VoicePipeline)
+        mock_pipeline.synthesizer = mock_synth
+
+        mock_failsafe = MagicMock(spec=FailSafeMonitor)
+        mock_failsafe.is_interrupted.return_value = False
+
+        app = GupkaCommanderApp(
+            app=qapp,
+            llm_client=mock_llm,
+            voice_pipeline=mock_pipeline,
+            failsafe_monitor=mock_failsafe,
+            enable_voice=True,
+            enable_hotkey=False,
+            enable_tray=False,
+        )
+
+        response = app.execute_command("Привет, как дела?")
+        assert response == "Привет, Денис! Готов помочь."
+        mock_llm.generate_response_stream.assert_called_once_with("Привет, как дела?")
+        mock_synth.speak_stream.assert_called_once()
+        app.shutdown()
+
+    def test_execute_command_ai_cognitive_failsafe_interruption(self, qapp: QApplication) -> None:
+        """Проверка аварийного прерывания генерации при взведенном FailSafe по Esc."""
+        mock_llm = MagicMock(spec=LocalLLMClient)
+        mock_llm.is_healthy.return_value = True
+        mock_llm.plan_actions.return_value = []
+        mock_llm.generate_response_stream.return_value = iter(["Первый чанк. ", "Второй чанк."])
+
+        mock_synth = MagicMock()
+        mock_pipeline = MagicMock(spec=VoicePipeline)
+        mock_pipeline.synthesizer = mock_synth
+
+        mock_failsafe = MagicMock(spec=FailSafeMonitor)
+        # Прерывание на первом же чанке
+        mock_failsafe.is_interrupted.return_value = True
+
+        app = GupkaCommanderApp(
+            app=qapp,
+            llm_client=mock_llm,
+            voice_pipeline=mock_pipeline,
+            failsafe_monitor=mock_failsafe,
+            enable_voice=True,
+            enable_hotkey=False,
+            enable_tray=False,
+        )
+
+        response = app.execute_command("Сгенерируй длинный текст")
+        assert "FailSafe" in response or "прервана" in response
+        mock_synth.stop.assert_called_once()
+        app.shutdown()

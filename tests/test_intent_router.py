@@ -328,4 +328,3 @@ class TestUIAutomationRouting:
         assert res.params["element_name"] == "Имя"
         assert res.params["text"] == "Денис"
         assert res.params["window_title"] == "Профиль"
-
