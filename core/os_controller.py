@@ -137,32 +137,83 @@ class WebLauncher:
 
 
 class ShellExecutor:
-    """Компонент для выполнения команд оболочки и запуска терминала."""
+    """Компонент для выполнения команд оболочки и запуска терминала с усиленной защитой."""
 
-    DANGEROUS_PATTERNS: tuple[str, ...] = (
-        r"format-volume",
-        r"\bformat\s+[a-zA-Z]:",
-        r"\bdel\b.*\bc:\\",
-        r"\brmdir\b.*\bc:\\",
-        r"\brm\s+-r?f\s+(/|c:)",
-        r"\bremove-item\b.*(-recurse|-force).*c:\\",
+    DANGEROUS_CMD_PATTERNS: tuple[str, ...] = (
+        r"\bclear-disk\b",
+        r"\binitialize-disk\b",
+        r"\bformat-volume\b",
+        r"\bformat\s+[a-z]:?(?:\s|$)",
+        r"\bdiskpart\b",
         r"\bstop-computer\b",
         r"\brestart-computer\b",
-        r"\bdiskpart\b",
+        r"\bshutdown\b.*?(?:/|-)[sr]\b",
+        r"\bvssadmin\b",
+        r"\bbcdedit\b",
+        r"\binvoke-expression\b",
+        r"\biex\b",
+        r"\.downloadstring\(",
+        r"\.downloadfile\(",
+        r"\breg\s+delete\b",
     )
 
+    ROOT_TARGET_PATTERN: str = (
+        r"(?:(?<=[\s\"':=])|^)"
+        r"(?:[a-z]:(?:/(?:\*|(?=[\s\"']|$))|\*|(?=[\s\"']|$))|/(?:\*|(?=[\s\"']|$)))"
+    )
+    DELETE_CMD_PATTERN: str = r"\b(remove-item|ri|del|erase|rmdir|rd|rm)\b"
+    DRIVE_PATH_PATTERN: str = r"(?:(?<=[\s\"':=])|^)[a-z]:/"
+    RECURSIVE_FLAG_PATTERN: str = r"(-recurse|-force|-r\b|-f\b|/s\b)"
+    DIR_DELETE_PATTERN: str = r"\b(rmdir|rd)\b"
+
+    # Обратная совместимость с внешними ссылками
+    DANGEROUS_PATTERNS: tuple[str, ...] = DANGEROUS_CMD_PATTERNS
+
+    def _normalize_command(self, command: str) -> str:
+        """Нормализация строки команды.
+
+        Приводит к нижнему регистру, заменяет обратные слеши и сжимает пробелы.
+        """
+        normalized = command.strip().replace("\\", "/").lower()
+        return re.sub(r"\s+", " ", normalized)
+
+    def _check_dangerous_cmdlets(self, normalized: str) -> str | None:
+        """Проверка на наличие опасных командлетов, системных утилит и удаленного исполнения."""
+        for pattern in self.DANGEROUS_CMD_PATTERNS:
+            if re.search(pattern, normalized):
+                return pattern
+        return None
+
+    def _check_filesystem_deletion(self, normalized: str) -> str | None:
+        """Проверка на деструктивное удаление корневых дисков, разделов и системных путей."""
+        if not re.search(self.DELETE_CMD_PATTERN, normalized):
+            return None
+
+        if re.search(self.ROOT_TARGET_PATTERN, normalized):
+            return "деструктивное удаление корневого диска или файловой системы"
+
+        is_drive_targeted = bool(re.search(self.DRIVE_PATH_PATTERN, normalized))
+        is_recursive_or_forced = bool(re.search(self.RECURSIVE_FLAG_PATTERN, normalized))
+        is_dir_removal = bool(re.search(self.DIR_DELETE_PATTERN, normalized))
+
+        if is_drive_targeted and (is_recursive_or_forced or is_dir_removal):
+            return "деструктивное рекурсивное удаление системных или дисковых путей"
+
+        return None
+
     def is_safe_command(self, command: str) -> tuple[bool, str | None]:
-        """Проверка команды на наличие запрещенных деструктивных шаблонов."""
-        normalized_command = command.strip().lower()
-        if not normalized_command:
+        """Проверка команды на наличие запрещенных деструктивных шаблонов и векторов обхода."""
+        normalized = self._normalize_command(command)
+        if not normalized:
             return True, None
 
-        if "del /f /s /q c:\\" in normalized_command or "rm -rf /" in normalized_command:
-            return False, "деструктивное удаление системных файлов"
+        cmdlet_match = self._check_dangerous_cmdlets(normalized)
+        if cmdlet_match is not None:
+            return False, cmdlet_match
 
-        for pattern in self.DANGEROUS_PATTERNS:
-            if re.search(pattern, normalized_command, re.IGNORECASE):
-                return False, pattern
+        deletion_match = self._check_filesystem_deletion(normalized)
+        if deletion_match is not None:
+            return False, deletion_match
 
         return True, None
 
@@ -301,6 +352,18 @@ class WindowManager:
             logger.error("Не удалось закрыть окно %d: %s", hwnd, error)
             return False
 
+    def minimize_all(self) -> bool:
+        """Сворачивание всех окон на рабочем столе комбинацией клавиш Win+M."""
+        try:
+            win32api.keybd_event(win32con.VK_LWIN, 0, 0, 0)
+            win32api.keybd_event(ord("M"), 0, 0, 0)
+            win32api.keybd_event(ord("M"), 0, win32con.KEYEVENTF_KEYUP, 0)
+            win32api.keybd_event(win32con.VK_LWIN, 0, win32con.KEYEVENTF_KEYUP, 0)
+            return True
+        except Exception as error:
+            logger.error("Не удалось свернуть все окна: %s", error)
+            return False
+
     def volume_up(self) -> None:
         """Увеличение громкости системы на один шаг."""
         win32api.keybd_event(win32con.VK_VOLUME_UP, 0, 0, 0)
@@ -362,6 +425,11 @@ class OSController:
     def minimize_window(self, title_query: str) -> bool:
         """Сворачивание окна по заголовку."""
         return self.window.minimize_window(title_query)
+
+    def minimize_all(self) -> bool:
+        """Сворачивание всех окон."""
+        self.minimize_window("")
+        return self.window.minimize_all()
 
     def maximize_window(self, title_query: str) -> bool:
         """Разворачивание окна по заголовку."""

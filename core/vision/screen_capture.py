@@ -196,6 +196,8 @@ class ScreenFrame:
 class ScreenCapture:
     """Модуль захвата рабочего стола с расчетом хешей и поддержкой DPI."""
 
+    set_dpi_awareness = staticmethod(set_dpi_awareness)
+
     def __init__(
         self,
         mss_factory: Any | None = None,

@@ -57,6 +57,7 @@ class VoiceBridge(QObject):
     transcription_received = Signal(str)
     state_changed = Signal(str)
     audio_level_received = Signal(float)
+    stream_chunk_received = Signal(str)
 
 
 class GupkaCommanderApp(QObject):
@@ -459,6 +460,7 @@ class GupkaCommanderApp(QObject):
             return "Окно восстановлено."
         if action == "minimize_all":
             self.os_controller.minimize_window("")
+            self.os_controller.minimize_all()
             return "Все окна свернуты."
         return f"Выполнено действие с окном: {action}."
 
@@ -701,6 +703,10 @@ class GupkaCommanderApp(QObject):
                 tokens.append(chunk)
                 if card is not None and hasattr(card, "set_text"):
                     card.set_text("".join(tokens))
+                try:
+                    self.voice_bridge.stream_chunk_received.emit(chunk)
+                except Exception as exc:
+                    logger.debug("Ошибка отправки stream_chunk_received: %s", exc)
 
                 for sentence in accumulator.feed(chunk):
                     if can_speak:
@@ -906,6 +912,7 @@ class GupkaCommanderApp(QObject):
             return "Окно восстановлено."
         if action == "minimize_all":
             self.os_controller.minimize_window("")
+            self.os_controller.minimize_all()
             return "Все окна свернуты."
         return f"Действие с окном '{action}' выполнено."
 
@@ -952,9 +959,15 @@ class GupkaCommanderApp(QObject):
             except Exception as exc:
                 logger.debug("Ошибка при остановке синтезатора: %s", exc)
 
-    def start(self) -> None:
-        """Запуск всех подсистем приложения."""
-        logger.info("Запуск подсистем GupkaCommander...")
+    def start(self, start_hidden: bool = False) -> None:
+        """
+        Запуск всех подсистем приложения.
+
+        Args:
+            start_hidden: Если True, окно SpotlightBar не отображается при старте
+                          (тихий запуск в системный трей).
+        """
+        logger.info("Запуск подсистем GupkaCommander (start_hidden=%s)...", start_hidden)
 
         # 0. Монитор безопасности FailSafe
         try:
@@ -978,7 +991,8 @@ class GupkaCommanderApp(QObject):
                 logger.warning("Не удалось запустить голосовой конвейер: %s", exc)
 
         # 4. Отображение главного окна SpotlightBar
-        self.spotlight_bar.show_bar()
+        if not start_hidden:
+            self.spotlight_bar.show_bar()
         logger.info("GupkaCommander успешно запущен и готов к работе.")
 
     def shutdown(self) -> None:
@@ -1043,11 +1057,22 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Запустить интерфейс в headless режиме (offscreen)",
     )
+    parser.add_argument(
+        "--quiet",
+        "-q",
+        action="store_true",
+        help="Запустить приложение свернутым в системный трей без показа SpotlightBar",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     """Точка входа запуска приложения GupkaCommander."""
+    # 0. Инициализация Per-Monitor DPI Awareness до создания контекста Qt
+    from core.vision.screen_capture import set_dpi_awareness
+
+    set_dpi_awareness()
+
     args = parse_arguments()
 
     if args.headless or os.environ.get("QT_QPA_PLATFORM") == "offscreen":
@@ -1068,7 +1093,7 @@ def main() -> int:
         enable_tray=not args.no_tray,
     )
 
-    commander.start()
+    commander.start(start_hidden=bool(args.quiet))
 
     # В headless режиме не блокируем процесс бесконечно
     if args.headless:

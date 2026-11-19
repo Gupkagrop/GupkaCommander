@@ -60,6 +60,13 @@ def set_clipboard_text(text: str) -> bool:
             user32 = ctypes.windll.user32
             kernel32 = ctypes.windll.kernel32
 
+            kernel32.GlobalAlloc.restype = ctypes.c_void_p
+            kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+            kernel32.GlobalLock.restype = ctypes.c_void_p
+            kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+            kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+            kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+
             if not user32.OpenClipboard(None):
                 return False
             try:
@@ -72,6 +79,7 @@ def set_clipboard_text(text: str) -> bool:
                     return False
                 p_mem = kernel32.GlobalLock(h_mem)
                 if not p_mem:
+                    kernel32.GlobalFree(h_mem)
                     return False
                 ctypes.memmove(p_mem, text_bytes, len(text_bytes))
                 kernel32.GlobalUnlock(h_mem)

@@ -678,6 +678,7 @@ class LocalLLMClient:
 
     def _read_sse_stream(self, resp: requests.Response) -> Iterator[str]:
         """Построчное чтение и распаковка текстовых чанков из ответа SSE."""
+        resp.encoding = "utf-8"
         for raw_line in resp.iter_lines(decode_unicode=True):
             if not raw_line:
                 continue

@@ -20,8 +20,8 @@ datas = [
     (str(project_root / 'config' / 'commands.json'), 'config'),
 ]
 
-# Сбор данных пакетов (sounddevice, piper_tts) при их наличии
-for package_name in ['sounddevice', 'piper_tts', 'faster_whisper']:
+# Сбор данных пакетов (sounddevice, piper, faster_whisper) при их наличии
+for package_name in ['sounddevice', 'piper', 'piper_phonemize', 'faster_whisper']:
     try:
         collected = collect_data_files(package_name)
         if collected:

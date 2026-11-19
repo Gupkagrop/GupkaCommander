@@ -84,8 +84,16 @@ def build_executable() -> int:
         print(f"❌ Исполняемый файл не найден по пути: {exe_path}")
         return 1
 
-    exe_size_mb = exe_path.stat().st_size / (1024 * 1024)
     dist_dir = project_root / "dist" / "GupkaCommander"
+    espeak_dir = dist_dir / "_internal" / "piper" / "espeak-ng-data"
+    alt_espeak = dist_dir / "piper" / "espeak-ng-data"
+    if espeak_dir.exists() or alt_espeak.exists():
+        found = espeak_dir if espeak_dir.exists() else alt_espeak
+        print(f"🗣️ Данные фонемизатора espeak-ng-data подтверждены: {found.name}")
+    else:
+        print("⚠️ Внимание: espeak-ng-data не найден в директории dist.")
+
+    exe_size_mb = exe_path.stat().st_size / (1024 * 1024)
     total_size_mb = get_dir_size_mb(dist_dir)
 
     print("\n✅ Сборка успешно завершена!")

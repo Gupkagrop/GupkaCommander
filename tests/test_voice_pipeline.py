@@ -561,7 +561,10 @@ def test_real_voice_components_integration(mock_stream_cls: Any) -> None:
     for _ in range(4):
         cap._enqueue_chunk(silence_chunk)
 
-    time.sleep(0.3)
+    for _ in range(30):
+        if transcriptions:
+            break
+        time.sleep(0.05)
     pipeline.speak("Подтверждаю", blocking=True)
     assert "Сквозной тест успешно" in transcriptions
     assert pipeline.state == PipelineState.IDLE

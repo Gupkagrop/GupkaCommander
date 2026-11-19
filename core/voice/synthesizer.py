@@ -121,7 +121,11 @@ class PiperSynthesizer:
     @classmethod
     def _resolve_default_model_path(cls) -> Path | None:
         """Проверяет путь models/piper/ru_RU-dmitri-medium.onnx по умолчанию."""
+        from core.paths import get_models_dir
+
+        models_dir = get_models_dir()
         candidates = [
+            models_dir / "piper" / "ru_RU-dmitri-medium.onnx",
             cls.DEFAULT_MODEL_PATH,
             Path.cwd() / cls.DEFAULT_MODEL_PATH,
             Path(__file__).resolve().parent.parent.parent / cls.DEFAULT_MODEL_PATH,
@@ -325,6 +329,7 @@ class PiperSynthesizer:
             self._run_playback(clean_text)
             return
 
+        self._is_speaking = True
         self._playback_thread = threading.Thread(
             target=self._run_playback,
             args=(clean_text,),
@@ -399,6 +404,7 @@ class PiperSynthesizer:
                 with self._stream_lock:
                     self._current_stream = None
 
+        self._is_speaking = True
         self._producer_thread = threading.Thread(
             target=_producer,
             name="PiperSynthesizerProducer",

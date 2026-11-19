@@ -54,7 +54,19 @@ class FasterWhisperTranscriber:
         self._device: str = device
         self._compute_type: str = compute_type
         self._cpu_threads: int = cpu_threads
-        self._download_root: str | None = download_root
+        if download_root is None:
+            from core.paths import get_models_dir
+
+            self._download_root: str | None = str(get_models_dir() / "whisper")
+        elif download_root == "models/whisper":
+            from core.paths import get_models_dir, is_bundled
+
+            if is_bundled():
+                self._download_root = str(get_models_dir() / "whisper")
+            else:
+                self._download_root = download_root
+        else:
+            self._download_root = download_root
         self._local_files_only: bool = local_files_only
         self._model_factory: Callable[..., Any] | None = (
             model_factory

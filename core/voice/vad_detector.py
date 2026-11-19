@@ -84,7 +84,11 @@ class VADDetector:
                 return candidate.resolve()
             return None
 
+        from core.paths import get_models_dir
+
+        models_dir = get_models_dir()
         default_paths = [
+            models_dir / "silero_vad.onnx",
             Path("models/silero_vad.onnx"),
             Path.cwd() / "models" / "silero_vad.onnx",
             Path(__file__).resolve().parent.parent.parent / "models" / "silero_vad.onnx",

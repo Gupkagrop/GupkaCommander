@@ -22,6 +22,9 @@ def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"))
 
 
+is_bundled = is_frozen
+
+
 def get_bundle_root() -> Path:
     """
     Возвращает корневую директорию неизменяемых ресурсов приложения.
