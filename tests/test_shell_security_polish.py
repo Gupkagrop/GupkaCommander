@@ -92,6 +92,16 @@ class TestShellSecurityPolish:
             "diskpart /s script.txt",
             "stop-computer -force",
             "restart-computer -force",
+            "format C:\\",
+            "format c:/",
+            "powershell -enc ZABpAHIA",
+            "powershell -EncodedCommand ZABpAHIA",
+            "pwsh -e ZABpAHIA",
+            "i`e`x (calc.exe)",
+            "[Convert]::FromBase64String('XYZ')",
+            "[ScriptBlock]::Create('evil')",
+            "Remove-Item $env:SystemRoot -Recurse -Force",
+            "del -r ~",
         ],
     )
     def test_dangerous_cmdlet_and_flag_variations_blocked(

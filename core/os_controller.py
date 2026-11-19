@@ -143,7 +143,7 @@ class ShellExecutor:
         r"\bclear-disk\b",
         r"\binitialize-disk\b",
         r"\bformat-volume\b",
-        r"\bformat\s+[a-z]:?(?:\s|$)",
+        r"\bformat(?:\.com)?\s+[a-z]:(?:/|\s|$)",
         r"\bdiskpart\b",
         r"\bstop-computer\b",
         r"\brestart-computer\b",
@@ -155,6 +155,11 @@ class ShellExecutor:
         r"\.downloadstring\(",
         r"\.downloadfile\(",
         r"\breg\s+delete\b",
+        r"\b(?:powershell|pwsh)\b.*?\s-(?:e|ec|enc|encodedcommand)\b",
+        r"\[convert\]::frombase64string",
+        r"\[scriptblock\]::create",
+        r"\b(?:remove-item|del|erase|rd|ri)\b.*?(?:\$env:[a-z0-9_]+|~)",
+        r"(?:\$env:[a-z0-9_]+|~).*?\b(?:remove-item|del|erase|rd|ri)\b",
     )
 
     ROOT_TARGET_PATTERN: str = (
@@ -172,10 +177,11 @@ class ShellExecutor:
     def _normalize_command(self, command: str) -> str:
         """Нормализация строки команды.
 
-        Приводит к нижнему регистру, заменяет обратные слеши и сжимает пробелы.
+        Приводит к нижнему регистру, заменяет обратные слеши,
+        удаляет backtick (обфускация) и сжимает пробелы.
         """
-        normalized = command.strip().replace("\\", "/").lower()
-        return re.sub(r"\s+", " ", normalized)
+        cleaned = command.strip().replace("`", "").replace("\\", "/").lower()
+        return re.sub(r"\s+", " ", cleaned)
 
     def _check_dangerous_cmdlets(self, normalized: str) -> str | None:
         """Проверка на наличие опасных командлетов, системных утилит и удаленного исполнения."""
@@ -231,14 +237,17 @@ class ShellExecutor:
             command,
         ]
 
+        kwargs: dict[str, Any] = {
+            "capture_output": True,
+            "text": True,
+            "timeout": timeout,
+            "check": False,
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
         try:
-            result = subprocess.run(
-                cmd_args,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
+            result = subprocess.run(cmd_args, **kwargs)
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired:
             logger.warning("Время выполнения команды превысило %d секунд: %s", timeout, command)
