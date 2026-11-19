@@ -8,7 +8,7 @@
 import math
 from typing import Any, override
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Slot
 from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import QWidget
 
@@ -92,6 +92,16 @@ class WaveformWidget(QWidget):
         # Быстрое сглаживание для исключения резких скачков
         self._level = 0.4 * self._target_level + 0.6 * self._level
         self.update()
+
+    @Slot(float)
+    def set_audio_level(self, amplitude: float) -> None:
+        """
+        Устанавливает уровень громкости звукового сигнала (Qt-слот для VoiceBridge).
+
+        Args:
+            amplitude: Число от 0.0 до 1.0.
+        """
+        self.set_level(amplitude)
 
     def start_animation(self) -> None:
         """Запускает таймер анимации виджета."""
@@ -223,6 +233,18 @@ class WaveformWidget(QWidget):
             x = start_x + i * (bar_width + bar_gap)
             y = cy - (bar_h / 2.0)
             painter.drawRoundedRect(QRectF(x, y, bar_width, bar_h), 1.5, 1.5)
+
+    @override
+    def hideEvent(self, event: Any) -> None:
+        """Остановка таймера анимации при скрытии виджета для экономии ресурсов."""
+        self.stop_animation()
+        super().hideEvent(event)
+
+    @override
+    def showEvent(self, event: Any) -> None:
+        """Возобновление таймера анимации при отображении виджета."""
+        super().showEvent(event)
+        self.start_animation()
 
     @override
     def closeEvent(self, event: Any) -> None:

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
@@ -241,18 +241,39 @@ class TestAppUIACascadeIntegration:
     def test_uia_click_miss_cascade_to_vision_fallback(
         self, app_bundle: tuple[GupkaCommanderApp, MagicMock, MagicMock]
     ) -> None:
-        """Если элемент не найден в UIA (False), происходит мягкий каскад на click_at."""
+        """Если элемент не найден в UIA (False), при успехе VLM происходит каскад на click_at."""
         app, mock_uia, mock_vision = app_bundle
         # UIA не смог найти элемент в дереве
         mock_uia.click_element.return_value = False
+        mock_vision.inspect_screen.return_value = {"image_b64": "fake"}
 
-        resp = app.execute_command("нажми кнопку Подтвердить")
+        with patch.object(
+            app.llm_client,
+            "plan_actions",
+            return_value=[{"tool": "click_screen", "parameters": {"x": 150, "y": 250}}],
+        ):
+            resp = app.execute_command("нажми кнопку Подтвердить")
 
-        # UIA попытался найти элемент
-        mock_uia.click_element.assert_called_once_with("Подтвердить", window_title=None)
-        # Автоматический каскадный вызов VisionAgent
-        mock_vision.click_at.assert_called_once()
-        assert "визуальный" in resp.lower()
+            # UIA попытался найти элемент
+            mock_uia.click_element.assert_called_once_with("Подтвердить", window_title=None)
+            # Автоматический каскадный вызов VisionAgent
+            mock_vision.click_at.assert_called_once_with(150, 250, verify_change=False)
+            assert "визуальный" in resp.lower()
+
+    def test_uia_click_miss_no_blind_click_without_vlm_coords(
+        self, app_bundle: tuple[GupkaCommanderApp, MagicMock, MagicMock]
+    ) -> None:
+        """Если VLM не вернул координаты, клик вслепую не выполняется."""
+        app, mock_uia, mock_vision = app_bundle
+        mock_uia.click_element.return_value = False
+        mock_vision.inspect_screen.return_value = {"image_b64": "fake"}
+
+        with patch.object(app.llm_client, "plan_actions", return_value=[]):
+            resp = app.execute_command("нажми кнопку Подтвердить")
+
+            mock_uia.click_element.assert_called_once_with("Подтвердить", window_title=None)
+            mock_vision.click_at.assert_not_called()
+            assert "не найден на экране через визуальный анализ" in resp
 
     def test_uia_type_success_and_fallback(
         self, app_bundle: tuple[GupkaCommanderApp, MagicMock, MagicMock]

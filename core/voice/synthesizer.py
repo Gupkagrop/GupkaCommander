@@ -13,6 +13,7 @@ import queue
 import threading
 import time
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -21,11 +22,36 @@ import sounddevice as sd  # type: ignore[import-untyped]
 import win32com.client  # type: ignore[import-untyped]
 
 try:
+    import pythoncom  # type: ignore[import-untyped]
+except ImportError:
+    pythoncom = None
+
+try:
     import piper
 except ImportError:
     piper = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _com_initialized() -> Iterator[None]:
+    """Контекстный менеджер инициализации COM-библиотеки в фоновом потоке."""
+    initialized = False
+    if pythoncom is not None:
+        try:
+            pythoncom.CoInitialize()
+            initialized = True
+        except Exception as exc:
+            logger.debug("Ошибка pythoncom.CoInitialize(): %s", exc)
+    try:
+        yield
+    finally:
+        if initialized and pythoncom is not None:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception as exc:
+                logger.debug("Ошибка pythoncom.CoUninitialize(): %s", exc)
 
 
 class PiperSynthesizer:
@@ -474,21 +500,22 @@ class PiperSynthesizer:
     def _play_sapi(self, text: str) -> None:
         """Воспроизведение через Windows SAPI5."""
         assert self._sapi_voice is not None
-        # Флаг 1: SVSFlagsAsync (асинхронное воспроизведение)
-        self._sapi_voice.Speak(text, 1)
+        with _com_initialized():
+            # Флаг 1: SVSFlagsAsync (асинхронное воспроизведение)
+            self._sapi_voice.Speak(text, 1)
 
-        # Ожидаем завершения фразы или сигнала прерывания (Barge-In)
-        while not self._stop_event.is_set():
-            status = getattr(self._sapi_voice, "Status", None)
-            if status is not None and getattr(status, "RunningState", 1) == 1:
-                break
-            time.sleep(0.02)
+            # Ожидаем завершения фразы или сигнала прерывания (Barge-In)
+            while not self._stop_event.is_set():
+                status = getattr(self._sapi_voice, "Status", None)
+                if status is not None and getattr(status, "RunningState", 1) == 1:
+                    break
+                time.sleep(0.02)
 
-        if self._stop_event.is_set():
-            try:
-                self._sapi_voice.Speak("", 2)
-            except Exception:
-                pass
+            if self._stop_event.is_set():
+                try:
+                    self._sapi_voice.Speak("", 2)
+                except Exception:
+                    pass
 
     def _play_mock(self, text: str) -> None:
         """Эмуляция синтеза речи для тестов и сред без аудиоустройств."""

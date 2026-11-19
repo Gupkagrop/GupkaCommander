@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 
@@ -326,3 +326,30 @@ def test_synthesizer_speak_stream_empty_iterator() -> None:
     synth.speak_stream(iter([]), blocking=True)
     assert not synth.is_speaking()
     mock_voice.synthesize.assert_not_called()
+
+
+def test_synthesizer_sapi_com_initialization() -> None:
+    """Проверка инициализации COM в фоновом потоке воспроизведения SAPI5."""
+    mock_sapi_voice = MagicMock()
+    mock_status = MagicMock()
+    mock_status.RunningState = 1  # Завершено
+    mock_sapi_voice.Status = mock_status
+
+    synth = PiperSynthesizer(
+        sapi_factory=lambda: mock_sapi_voice,
+        voice_factory=None,
+        model_path="non_existent.onnx",
+        use_sapi_fallback=True,
+    )
+    synth.initialize()
+    assert synth.backend == PiperSynthesizer.BACKEND_SAPI
+
+    with patch("core.voice.synthesizer.pythoncom") as mock_pythoncom:
+        mock_pythoncom.CoInitialize = MagicMock()
+        mock_pythoncom.CoUninitialize = MagicMock()
+
+        synth._play_sapi("Тест SAPI")
+
+        mock_pythoncom.CoInitialize.assert_called_once()
+        mock_pythoncom.CoUninitialize.assert_called_once()
+        mock_sapi_voice.Speak.assert_called_once_with("Тест SAPI", 1)

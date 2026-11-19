@@ -46,6 +46,32 @@ class AudioCapture:
         self._stream: sd.InputStream | None = None
         self._lock: threading.Lock = threading.Lock()
         self._is_running: bool = False
+        self._is_muted: bool = False
+
+    @property
+    def is_muted(self) -> bool:
+        """Возвращает флаг отключения микрофона (Mute)."""
+        return self._is_muted
+
+    @is_muted.setter
+    def is_muted(self, value: bool) -> None:
+        """Устанавливает флаг отключения микрофона."""
+        self._is_muted = bool(value)
+
+    def mute(self) -> None:
+        """Отключает запись с микрофона (Mute) и очищает накопленную очередь."""
+        with self._lock:
+            self._is_muted = True
+            while not self._queue.empty():
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:
+                    break
+
+    def unmute(self) -> None:
+        """Включает запись с микрофона (Unmute)."""
+        with self._lock:
+            self._is_muted = False
 
     def _audio_callback(
         self,
@@ -57,7 +83,7 @@ class AudioCapture:
         """
         Колбэк звукового драйвера sounddevice для обработки входящих сэмплов.
         """
-        if not self._is_running:
+        if not self._is_running or self._is_muted:
             return
 
         chunk = indata[:, 0] if indata.ndim > 1 else indata

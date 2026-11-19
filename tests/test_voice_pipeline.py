@@ -55,6 +55,12 @@ class MockAudioCapture:
     def is_active(self) -> bool:
         return self.started and not self.stopped
 
+    def mute(self) -> None:
+        self.muted = True
+
+    def unmute(self) -> None:
+        self.muted = False
+
 
 class MockVADDetector:
     """Мок для детектора речи с управляемым флагом speech."""
@@ -557,7 +563,51 @@ def test_real_voice_components_integration(mock_stream_cls: Any) -> None:
 
     time.sleep(0.3)
     pipeline.speak("Подтверждаю", blocking=True)
-    pipeline.stop()
-
     assert "Сквозной тест успешно" in transcriptions
     assert pipeline.state == PipelineState.IDLE
+    pipeline.stop()
+
+
+def test_voice_pipeline_mute_and_audio_level() -> None:
+    """Проверка переключения mute и передачи RMS уровня громкости в callback."""
+    cap = MockAudioCapture()
+    vad = MockVADDetector()
+    stt = MockTranscriber()
+    tts = MockSynthesizer()
+
+    levels: list[float] = []
+
+    pipeline = VoicePipeline(
+        audio_capture=cap,
+        vad_detector=vad,
+        transcriber=stt,
+        synthesizer=tts,
+        on_audio_level=lambda lvl: levels.append(lvl),
+    )
+
+    pipeline.start()
+
+    # Подаем тестовый чанк со значением 0.5 (RMS = 0.5)
+    test_chunk = np.ones(512, dtype=np.float32) * 0.5
+    cap.chunks_queue.put(test_chunk)
+
+    time.sleep(0.15)
+    assert len(levels) > 0
+    assert abs(levels[-1] - 0.5) < 0.05
+
+    # Включаем Mute
+    pipeline.set_muted(True)
+    assert pipeline.is_muted()
+    assert getattr(cap, "muted", False) is True
+
+    # При mute отправляется 0.0
+    cap.chunks_queue.put(test_chunk)
+    time.sleep(0.15)
+    assert levels[-1] == 0.0
+
+    # Выключаем Mute
+    pipeline.set_muted(False)
+    assert not pipeline.is_muted()
+    assert getattr(cap, "muted", False) is False
+
+    pipeline.stop()

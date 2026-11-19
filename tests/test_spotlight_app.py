@@ -346,15 +346,34 @@ class TestGupkaCommanderAppUIAutomation:
     def test_uia_cascading_fallback_to_vision(
         self, app_with_uia: tuple[GupkaCommanderApp, MagicMock, MagicMock]
     ) -> None:
-        """Проверка каскадного fallback на VisionAgent при отсутствии элемента в UIA."""
+        """Проверка каскадного fallback на VisionAgent при обнаружении элемента через VLM."""
         app, mock_uia, mock_vision = app_with_uia
         mock_uia.click_element.return_value = False
         mock_vision.inspect_screen.return_value = {"image_b64": "fake"}
 
-        resp = app.execute_command("нажми кнопку Несуществующая")
-        mock_uia.click_element.assert_called_once_with("Несуществующая", window_title=None)
-        mock_vision.click_at.assert_called_once()
-        assert "Vision Fallback" in resp
+        with patch.object(
+            app.llm_client,
+            "plan_actions",
+            return_value=[{"tool": "click_screen", "parameters": {"x": 300, "y": 400}}],
+        ):
+            resp = app.execute_command("нажми кнопку Несуществующая")
+            mock_uia.click_element.assert_called_once_with("Несуществующая", window_title=None)
+            mock_vision.click_at.assert_called_once_with(300, 400, verify_change=False)
+            assert "Vision Fallback" in resp
+
+    def test_uia_cascading_fallback_no_blind_click_when_not_found(
+        self, app_with_uia: tuple[GupkaCommanderApp, MagicMock, MagicMock]
+    ) -> None:
+        """Проверка отсутствия слепого клика (500, 500), если VLM не вернул координаты."""
+        app, mock_uia, mock_vision = app_with_uia
+        mock_uia.click_element.return_value = False
+        mock_vision.inspect_screen.return_value = {"image_b64": "fake"}
+
+        with patch.object(app.llm_client, "plan_actions", return_value=[]):
+            resp = app.execute_command("нажми кнопку Несуществующая")
+            mock_uia.click_element.assert_called_once_with("Несуществующая", window_title=None)
+            mock_vision.click_at.assert_not_called()
+            assert "не найден на экране через визуальный анализ" in resp
 
     def test_uia_type_into_element(
         self, app_with_uia: tuple[GupkaCommanderApp, MagicMock, MagicMock]

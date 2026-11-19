@@ -175,3 +175,28 @@ class TestAudioCapture:
         data = np.ones((512, 1), dtype=np.float32)
         cap._audio_callback(data, 512, None, MagicMock())
         assert cap.queue_size == 0
+
+    def test_mute_unmute_lifecycle(self) -> None:
+        """Проверка отключения и включения записи звука (Mute/Unmute)."""
+        cap = AudioCapture()
+        cap._is_running = True
+        assert not cap.is_muted
+
+        # При активном микрофоне чанки попадают в очередь
+        data = np.ones((512, 1), dtype=np.float32)
+        cap._audio_callback(data, 512, None, MagicMock())
+        assert cap.queue_size == 1
+
+        # Mute должен очистить очередь и игнорировать новые чанки
+        cap.mute()
+        assert cap.is_muted
+        assert cap.queue_size == 0
+
+        cap._audio_callback(data, 512, None, MagicMock())
+        assert cap.queue_size == 0
+
+        # Unmute возобновляет запись в очередь
+        cap.unmute()
+        assert not cap.is_muted
+        cap._audio_callback(data, 512, None, MagicMock())
+        assert cap.queue_size == 1

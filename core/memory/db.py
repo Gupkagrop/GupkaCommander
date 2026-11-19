@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -78,6 +80,17 @@ def get_utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+@contextmanager
+def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    """Контекстный менеджер транзакции с автоматическим commit и rollback при сбоях."""
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def init_database(db_path: str | Path = "config/memory.db") -> sqlite3.Connection:
     """Инициализирует базу данных SQLite, настраивает прагмы и создает схему таблиц.
 
@@ -97,9 +110,14 @@ def init_database(db_path: str | Path = "config/memory.db") -> sqlite3.Connectio
     else:
         conn = sqlite3.connect(":memory:", check_same_thread=False)
 
-    conn.execute("PRAGMA foreign_keys=ON;")
-    conn.row_factory = sqlite3.Row
-    conn.executescript(SCHEMA_SQL)
-    conn.commit()
+    try:
+        conn.execute("PRAGMA foreign_keys=ON;")
+        conn.execute("PRAGMA busy_timeout = 5000;")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(SCHEMA_SQL)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
     return conn

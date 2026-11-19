@@ -33,6 +33,8 @@ class AudioCaptureProtocol(Protocol):
     def read_chunk(self, timeout: float | None = None) -> np.ndarray | None: ...
     def clear(self) -> None: ...
     def is_active(self) -> bool: ...
+    def mute(self) -> None: ...
+    def unmute(self) -> None: ...
 
 
 @runtime_checkable
@@ -77,6 +79,7 @@ class VoicePipeline:
         on_speech_start: Callable[[], None] | None = None,
         on_transcription: Callable[[str], None] | None = None,
         on_speech_end: Callable[[], None] | None = None,
+        on_audio_level: Callable[[float], None] | None = None,
     ) -> None:
         """Инициализация голосового конвейера с внедрением зависимостей."""
         self._audio_capture = audio_capture
@@ -92,11 +95,13 @@ class VoicePipeline:
         self.on_speech_start = on_speech_start
         self.on_transcription = on_transcription
         self.on_speech_end = on_speech_end
+        self.on_audio_level = on_audio_level
 
         self._state: PipelineState = PipelineState.IDLE
         self._state_lock = threading.RLock()
         self._stop_event = threading.Event()
         self._loop_thread: threading.Thread | None = None
+        self._is_muted: bool = False
 
         # Расчет количества чанков тишины для завершения фразы
         chunk_duration_sec = self.chunk_size / float(self.sample_rate)
@@ -213,6 +218,44 @@ class VoicePipeline:
             and not self._stop_event.is_set()
         )
 
+    def set_muted(self, muted: bool) -> None:
+        """
+        Устанавливает состояние отключения микрофона (Mute).
+
+        Args:
+            muted: True, если микрофон отключен.
+        """
+        with self._state_lock:
+            self._is_muted = muted
+            capture = self._audio_capture
+            if capture is not None:
+                if hasattr(capture, "is_muted"):
+                    capture.is_muted = muted
+                if muted:
+                    if hasattr(capture, "mute"):
+                        capture.mute()
+                    if hasattr(capture, "clear"):
+                        capture.clear()
+                else:
+                    if hasattr(capture, "unmute"):
+                        capture.unmute()
+
+            if muted:
+                try:
+                    self.synthesizer.stop()
+                except Exception as exc:
+                    logger.debug("Ошибка остановки синтезатора при mute: %s", exc)
+                if self._state == PipelineState.LISTENING:
+                    self._set_state(PipelineState.IDLE)
+                if self.on_audio_level is not None:
+                    self._safe_invoke(self.on_audio_level, 0.0)
+        logger.info("Состояние микрофона в VoicePipeline: muted=%s", muted)
+
+    def is_muted(self) -> bool:
+        """Проверяет, отключен ли микрофон."""
+        with self._state_lock:
+            return self._is_muted
+
     def speak(self, text: str, blocking: bool = False) -> None:
         """Воспроизведение речи через PiperSynthesizer."""
         self._set_state(PipelineState.SPEAKING)
@@ -286,7 +329,37 @@ class VoicePipeline:
 
             chunk = self.audio_capture.read_chunk(timeout=0.05)
             if chunk is None:
+                if self.on_audio_level is not None and self._is_muted:
+                    self._safe_invoke(self.on_audio_level, 0.0)
                 continue
+
+            with self._state_lock:
+                muted = self._is_muted
+
+            if muted:
+                if self.on_audio_level is not None:
+                    self._safe_invoke(self.on_audio_level, 0.0)
+                if is_speech_active:
+                    is_speech_active = False
+                    speech_chunks.clear()
+                    silence_counter = 0
+                    try:
+                        self.vad_detector.reset_states()
+                    except Exception:
+                        pass
+                    self._set_state(PipelineState.IDLE)
+                continue
+
+            if self.on_audio_level is not None:
+                try:
+                    if len(chunk) > 0:
+                        rms = float(np.sqrt(np.mean(np.square(chunk.astype(np.float32)))))
+                        level = min(1.0, max(0.0, rms))
+                    else:
+                        level = 0.0
+                    self._safe_invoke(self.on_audio_level, level)
+                except Exception as exc:
+                    logger.debug("Ошибка вычисления RMS уровня: %s", exc)
 
             is_speech = bool(self.vad_detector.process_chunk(chunk))
 

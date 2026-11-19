@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from core.memory.db import get_utc_now_iso, init_database
+from core.memory.db import get_utc_now_iso, init_database, transaction
 
 
 class MemoryManager:
@@ -69,7 +69,7 @@ class MemoryManager:
         now_iso: str = get_utc_now_iso()
         clean_cat: str = (category or "general").strip()
 
-        with self._lock:
+        with self._lock, transaction(self._conn):
             self._conn.execute(
                 """
                 INSERT INTO user_facts (key, value, category, created_at, updated_at)
@@ -81,7 +81,6 @@ class MemoryManager:
                 """,
                 (clean_key, clean_val, clean_cat, now_iso, now_iso),
             )
-            self._conn.commit()
 
     def get_fact(self, key: str) -> str | None:
         """Получает значение факта по ключу.
@@ -162,12 +161,11 @@ class MemoryManager:
         if not clean_key:
             return False
 
-        with self._lock:
+        with self._lock, transaction(self._conn):
             cursor = self._conn.execute(
                 "DELETE FROM user_facts WHERE key = ?",
                 (clean_key,),
             )
-            self._conn.commit()
             return cursor.rowcount > 0
 
     def add_note(self, content: str, tags: list[str] | None = None) -> int:
@@ -191,7 +189,7 @@ class MemoryManager:
         tags_str: str = " ".join(clean_tags)
         now_iso: str = get_utc_now_iso()
 
-        with self._lock:
+        with self._lock, transaction(self._conn):
             cursor = self._conn.execute(
                 """
                 INSERT INTO notes (content, tags, is_done, created_at, updated_at)
@@ -199,7 +197,6 @@ class MemoryManager:
                 """,
                 (clean_content, tags_str, now_iso, now_iso),
             )
-            self._conn.commit()
             return int(cursor.lastrowid or 0)
 
     @staticmethod
@@ -300,12 +297,11 @@ class MemoryManager:
             True, если статус заметки обновлен, иначе False.
         """
         now_iso: str = get_utc_now_iso()
-        with self._lock:
+        with self._lock, transaction(self._conn):
             cursor = self._conn.execute(
                 "UPDATE notes SET is_done = 1, updated_at = ? WHERE id = ?",
                 (now_iso, note_id),
             )
-            self._conn.commit()
             return cursor.rowcount > 0
 
     def delete_note(self, note_id: int) -> bool:
@@ -317,12 +313,11 @@ class MemoryManager:
         Returns:
             True, если заметка удалена, иначе False.
         """
-        with self._lock:
+        with self._lock, transaction(self._conn):
             cursor = self._conn.execute(
                 "DELETE FROM notes WHERE id = ?",
                 (note_id,),
             )
-            self._conn.commit()
             return cursor.rowcount > 0
 
     def log_turn(
@@ -345,7 +340,7 @@ class MemoryManager:
             json.dumps(tool_calls, ensure_ascii=False) if tool_calls is not None else None
         )
 
-        with self._lock:
+        with self._lock, transaction(self._conn):
             self._conn.execute(
                 """
                 INSERT INTO conversations (role, text, intent, tool_calls_json, created_at)
@@ -353,7 +348,6 @@ class MemoryManager:
                 """,
                 (role, text, intent, tool_calls_json, now_iso),
             )
-            self._conn.commit()
 
     def get_recent_history(self, limit: int = 10) -> list[dict[str, Any]]:
         """Возвращает последние диалоговые шаги в хронологическом порядке.

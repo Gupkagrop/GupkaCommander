@@ -146,6 +146,18 @@ class TestWaveformWidget:
         widget.close()
         assert not widget._timer.isActive()
 
+    def test_hide_and_show_events_control_timer(self, qapp: QApplication) -> None:
+        """Проверка остановки таймера при hideEvent и возобновления при showEvent."""
+        widget = WaveformWidget()
+        widget.show()
+        assert widget._timer.isActive()
+
+        widget.hide()
+        assert not widget._timer.isActive()
+
+        widget.show()
+        assert widget._timer.isActive()
+
 
 class TestChatDrawer:
     """Тестирование выдвижной панели истории ChatDrawer и MessageCard."""

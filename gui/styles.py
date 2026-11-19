@@ -67,6 +67,7 @@ QFrame#spotlightBar {{
 QLineEdit#searchInput {{
     background-color: transparent;
     color: {PALETTE.text};
+    placeholder-text-color: {PALETTE.secondary};
     border: none;
     font-size: 15px;
     padding: 6px 8px;
@@ -76,10 +77,6 @@ QLineEdit#searchInput {{
 
 QLineEdit#searchInput:focus {{
     border: none;
-}}
-
-QLineEdit#searchInput[placeholderText] {{
-    color: {PALETTE.secondary};
 }}
 
 /* Кнопки */

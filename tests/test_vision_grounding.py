@@ -351,6 +351,78 @@ def test_vision_agent_type_text_and_keys() -> None:
     assert mock_pyautogui.hotkey.call_count == 0
 
 
+def test_vision_agent_type_text_cyrillic_clipboard() -> None:
+    """Проверка ввода кириллицы через буфер обмена и комбинацию Ctrl+V."""
+    mock_pyautogui = MagicMock()
+    mock_clipboard = MagicMock(return_value=True)
+    agent = VisionAgent(pyautogui_module=mock_pyautogui, clipboard_fn=mock_clipboard)
+
+    agent.type_text("Привет мир")
+    mock_clipboard.assert_called_once_with("Привет мир")
+    mock_pyautogui.hotkey.assert_called_once_with("ctrl", "v")
+    assert mock_pyautogui.write.call_count == 0
+
+
+def test_vision_agent_type_text_cyrillic_clipboard_failure_fallback() -> None:
+    """Проверка отката на pyautogui.write при сбое буфера обмена для кириллицы."""
+    mock_pyautogui = MagicMock()
+    mock_clipboard = MagicMock(return_value=False)
+    agent = VisionAgent(pyautogui_module=mock_pyautogui, clipboard_fn=mock_clipboard)
+
+    agent.type_text("Тестовый текст", interval=0.05)
+    mock_clipboard.assert_called_once_with("Тестовый текст")
+    mock_pyautogui.hotkey.assert_not_called()
+    mock_pyautogui.write.assert_called_once_with("Тестовый текст", interval=0.05)
+
+
+def test_vision_agent_type_text_ascii_direct_write() -> None:
+    """Проверка прямого ввода ASCII-текста через pyautogui.write без буфера обмена."""
+    mock_pyautogui = MagicMock()
+    mock_clipboard = MagicMock()
+    agent = VisionAgent(pyautogui_module=mock_pyautogui, clipboard_fn=mock_clipboard)
+
+    agent.type_text("Hello World 123!", interval=0.01)
+    mock_clipboard.assert_not_called()
+    mock_pyautogui.hotkey.assert_not_called()
+    mock_pyautogui.write.assert_called_once_with("Hello World 123!", interval=0.01)
+
+
+def test_vision_agent_type_text_clipboard_exception_fallback() -> None:
+    """Проверка отката на pyautogui.write при исключении в функции буфера обмена."""
+    mock_pyautogui = MagicMock()
+    mock_clipboard = MagicMock(side_effect=RuntimeError("Clipboard lock error"))
+    agent = VisionAgent(pyautogui_module=mock_pyautogui, clipboard_fn=mock_clipboard)
+
+    agent.type_text("Привет мир")
+    mock_pyautogui.hotkey.assert_not_called()
+    mock_pyautogui.write.assert_called_once_with("Привет мир", interval=0.0)
+
+
+def test_vision_agent_click_at_unnormalized() -> None:
+    """Проверка клика по прямым экранным координатам без нормализации."""
+    mock_pyautogui = MagicMock()
+    mock_capture = MagicMock()
+    agent = VisionAgent(screen_capture=mock_capture, pyautogui_module=mock_pyautogui)
+
+    agent.click_at(450, 600, verify_change=False, normalized=False)
+    mock_capture.norm_to_screen.assert_not_called()
+    mock_pyautogui.click.assert_called_once_with(450, 600, button="left", clicks=1)
+
+
+def test_vision_agent_coordinate_sync() -> None:
+    """Проверка синхронизации физических экранных и нормализованных [0, 1000] координат."""
+    mock_capture = MagicMock()
+    mock_capture.get_screen_size.return_value = (1920, 1080)
+    mock_capture.norm_to_screen.side_effect = norm_to_screen
+    mock_capture.screen_to_norm.side_effect = screen_to_norm
+
+    agent = VisionAgent(screen_capture=mock_capture)
+
+    # Проверка преобразований
+    assert agent.norm_to_screen(500, 500) == (960, 540)
+    assert agent.screen_to_norm(960, 540) == (500, 500)
+
+
 def test_vision_agent_inspect_screen() -> None:
     """Проверка инспекции экрана для мультимодальной нейросети."""
     mock_capture = MagicMock()

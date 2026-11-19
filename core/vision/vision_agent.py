@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
+from collections.abc import Callable
 from typing import Any
 
 import pyautogui  # type: ignore[import-untyped]
@@ -19,6 +21,68 @@ from core.failsafe import FailSafeMonitor, get_failsafe_monitor, safe_execution
 from core.vision.screen_capture import ScreenCapture
 
 logger = logging.getLogger(__name__)
+
+
+def set_clipboard_text(text: str) -> bool:
+    """Запись строки в системный буфер обмена Windows.
+
+    Последовательно проверяет:
+    1. win32clipboard (CF_UNICODETEXT)
+    2. pyperclip
+    3. ctypes (Windows user32/kernel32 API)
+    """
+    try:
+        import win32clipboard  # type: ignore[import-untyped]
+        import win32con  # type: ignore[import-untyped]
+
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardText(text, win32con.CF_UNICODETEXT)
+            return True
+        finally:
+            win32clipboard.CloseClipboard()
+    except Exception as exc:
+        logger.debug("Не удалось записать в буфер через win32clipboard: %s", exc)
+
+    try:
+        import pyperclip  # type: ignore[import-untyped]
+
+        pyperclip.copy(text)
+        return True
+    except Exception as exc:
+        logger.debug("Не удалось записать в буфер через pyperclip: %s", exc)
+
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+
+            if not user32.OpenClipboard(None):
+                return False
+            try:
+                user32.EmptyClipboard()
+                text_bytes = (text + "\0").encode("utf-16le")
+                gmem_moveable = 0x0002
+                cf_unicodetext = 13
+                h_mem = kernel32.GlobalAlloc(gmem_moveable, len(text_bytes))
+                if not h_mem:
+                    return False
+                p_mem = kernel32.GlobalLock(h_mem)
+                if not p_mem:
+                    return False
+                ctypes.memmove(p_mem, text_bytes, len(text_bytes))
+                kernel32.GlobalUnlock(h_mem)
+                user32.SetClipboardData(cf_unicodetext, h_mem)
+                return True
+            finally:
+                user32.CloseClipboard()
+        except Exception as exc:
+            logger.warning("Ошибка при прямой записи в буфер через ctypes: %s", exc)
+
+    return False
 
 
 class ActionFailedError(RuntimeError):
@@ -37,6 +101,7 @@ class VisionAgent:
         mouse_move_steps: int = 5,
         max_click_attempts: int = 3,
         post_click_delay_s: float = 0.1,
+        clipboard_fn: Callable[[str], bool] | None = None,
     ) -> None:
         """Инициализация визуального агента.
 
@@ -48,6 +113,7 @@ class VisionAgent:
             mouse_move_steps: Количество шагов интерполяции траектории мыши.
             max_click_attempts: Лимит попыток клика до фиксации сбоя интерфейса.
             post_click_delay_s: Пауза между кликом и анализом изменения кадра.
+            clipboard_fn: Пользовательская функция копирования в буфер обмена.
         """
         self._screen_capture: ScreenCapture = screen_capture or ScreenCapture()
         self._monitor: FailSafeMonitor = monitor or get_failsafe_monitor()
@@ -56,6 +122,7 @@ class VisionAgent:
         self._mouse_move_steps: int = max(1, mouse_move_steps)
         self._max_click_attempts: int = max(1, max_click_attempts)
         self._post_click_delay_s: float = max(0.0, post_click_delay_s)
+        self._clipboard_fn: Callable[[str], bool] | None = clipboard_fn
 
         # Отключаем встроенный FailSafe pyautogui в пользу нашего FailSafeMonitor
         if hasattr(self._pyautogui, "FAILSAFE"):
@@ -66,6 +133,26 @@ class VisionAgent:
         """Доступ к экземпляру захвата экрана."""
         return self._screen_capture
 
+    def norm_to_screen(self, x_norm: int, y_norm: int) -> tuple[int, int]:
+        """Преобразование нормализованных координат [0, 1000] в физические экранные координаты."""
+        width, height = self._screen_capture.get_screen_size()
+        return self._screen_capture.norm_to_screen(x_norm, y_norm, width, height)
+
+    def screen_to_norm(self, x_screen: int, y_screen: int) -> tuple[int, int]:
+        """Преобразование физических экранных координат в нормализованный диапазон [0, 1000]."""
+        width, height = self._screen_capture.get_screen_size()
+        return self._screen_capture.screen_to_norm(x_screen, y_screen, width, height)
+
+    def _copy_to_clipboard(self, text: str) -> bool:
+        """Помещение текста в буфер обмена с безопасным откатом."""
+        if self._clipboard_fn is not None:
+            try:
+                return bool(self._clipboard_fn(text))
+            except Exception as exc:
+                logger.warning("Ошибка внешней функции буфера обмена: %s", exc)
+                return False
+        return set_clipboard_text(text)
+
     def move_to(
         self,
         x: int,
@@ -73,13 +160,15 @@ class VisionAgent:
         smooth: bool = True,
         duration: float | None = None,
         steps: int | None = None,
+        normalized: bool = False,
     ) -> None:
-        """Плавное перемещение курсора мыши в целевые экранные координаты."""
+        """Плавное перемещение курсора мыши в целевые экранные или нормализованные координаты."""
         with safe_execution(self._monitor) as safe:
             safe.check()
+            target_x, target_y = self.norm_to_screen(x, y) if normalized else (x, y)
             total_steps = steps if steps is not None else self._mouse_move_steps
             if not smooth or total_steps <= 1:
-                self._pyautogui.moveTo(x, y)
+                self._pyautogui.moveTo(target_x, target_y)
                 return
 
             total_duration = duration if duration is not None else self._mouse_move_duration
@@ -88,9 +177,11 @@ class VisionAgent:
             try:
                 start_x, start_y = self._pyautogui.position()
             except Exception:
-                start_x, start_y = (x, y)
+                start_x, start_y = (target_x, target_y)
 
-            self._interpolate_mouse_movement(start_x, start_y, x, y, total_steps, step_delay)
+            self._interpolate_mouse_movement(
+                start_x, start_y, target_x, target_y, total_steps, step_delay
+            )
 
     def _interpolate_mouse_movement(
         self,
@@ -139,16 +230,18 @@ class VisionAgent:
         clicks: int = 1,
         verify_change: bool = True,
         max_attempts: int | None = None,
+        normalized: bool = True,
     ) -> bool:
-        """Выполнение клика по нормализованным координатам с контролем изменения экрана.
+        """Клик по нормализованным или экранным координатам с контролем изменения экрана.
 
         Args:
-            x_norm: Нормализованная координата X [0, 1000].
-            y_norm: Нормализованная координата Y [0, 1000].
+            x_norm: Координата X ([0, 1000] или экранная в зависимости от normalized).
+            y_norm: Координата Y ([0, 1000] или экранная в зависимости от normalized).
             button: Кнопка мыши ('left', 'right', 'middle').
             clicks: Число нажатий (1 - одинарный, 2 - двойной).
             verify_change: Проверять изменение экрана после клика через dhash.
             max_attempts: Максимальное количество попыток при отсутствии реакции.
+            normalized: Интерпретировать ли переданные координаты как нормализованные [0, 1000].
 
         Returns:
             True при успешном выполнении клика.
@@ -157,8 +250,10 @@ class VisionAgent:
             ActionFailedError: Если экран не изменился после исчерпания попыток.
             InterruptedError: При аварийном прерывании (FailSafe).
         """
-        width, height = self._screen_capture.get_screen_size()
-        target_x, target_y = self._screen_capture.norm_to_screen(x_norm, y_norm, width, height)
+        if normalized:
+            target_x, target_y = self.norm_to_screen(x_norm, y_norm)
+        else:
+            target_x, target_y = (x_norm, y_norm)
 
         if not verify_change:
             with safe_execution(self._monitor):
@@ -187,12 +282,26 @@ class VisionAgent:
         )
 
     def type_text(self, text: str, interval: float = 0.0) -> None:
-        """Ввод текста с клавиатуры в активный интерфейсный элемент."""
+        """Ввод текста с клавиатуры в активный интерфейсный элемент.
+
+        Для ASCII-текста используется прямой ввод через pyautogui.write.
+        Для кириллицы и Unicode используется буфер обмена Windows и комбинация Ctrl+V.
+        """
         if not text:
             return
         with safe_execution(self._monitor) as safe:
             safe.check()
-            self._pyautogui.write(text, interval=interval)
+            is_ascii = all(ord(ch) < 128 for ch in text)
+            if is_ascii:
+                self._pyautogui.write(text, interval=interval)
+                return
+
+            # Для кириллицы/Unicode копируем в буфер и нажимаем Ctrl+V
+            copied = self._copy_to_clipboard(text)
+            if copied:
+                self._pyautogui.hotkey("ctrl", "v")
+            else:
+                self._pyautogui.write(text, interval=interval)
 
     def press_key(self, key: str, presses: int = 1) -> None:
         """Нажатие специальной или навигационной клавиши клавиатуры."""

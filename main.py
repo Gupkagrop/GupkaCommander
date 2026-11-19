@@ -16,6 +16,7 @@ import os
 import queue
 import subprocess
 import sys
+import threading
 from collections.abc import Iterator
 from typing import Any
 
@@ -128,6 +129,9 @@ class GupkaCommanderApp(QObject):
         self.memory_manager = memory_manager or MemoryManager(db_path="config/memory.db")
         self._current_response_streamed: bool = False
         self._audio_streamed: bool = False
+        self._is_shutting_down: bool = False
+        self._is_executing_command: bool = False
+        self._execution_lock: threading.Lock = threading.Lock()
         self.voice_bridge = VoiceBridge()
 
         # 3. Голосовой конвейер
@@ -135,6 +139,7 @@ class GupkaCommanderApp(QObject):
         self.voice_pipeline = voice_pipeline or VoicePipeline(
             on_transcription=self._on_voice_transcription,
             on_state_changed=self._on_voice_state_changed,
+            on_audio_level=self._on_audio_level,
         )
 
         # 4. Пользовательский интерфейс (GUI)
@@ -147,13 +152,18 @@ class GupkaCommanderApp(QObject):
 
         self._connect_signals()
 
+    @property
+    def spotlight(self) -> SpotlightBar:
+        """Алиас для spotlight_bar для совместимости со спецификацией координатора."""
+        return self.spotlight_bar
+
     def _connect_signals(self) -> None:
         """Связывание сигналов и слотов между ядром, голосом и интерфейсом."""
         # Мост голоса -> GUI
         self.voice_bridge.transcription_received.connect(self.handle_transcription)
         self.voice_bridge.state_changed.connect(self.spotlight_bar.set_pipeline_state)
         self.voice_bridge.state_changed.connect(self.tray_manager.set_state)
-        self.voice_bridge.audio_level_received.connect(self.spotlight_bar.set_audio_level)
+        self.voice_bridge.audio_level_received.connect(self.spotlight.waveform.set_audio_level)
 
         # SpotlightBar -> Выполнение команд
         self.spotlight_bar.command_submitted.connect(self.execute_command)
@@ -177,6 +187,10 @@ class GupkaCommanderApp(QObject):
         """Коллбэк из фонового потока VoicePipeline при смене состояния."""
         state_str = state.value if hasattr(state, "value") else str(state)
         self.voice_bridge.state_changed.emit(state_str)
+
+    def _on_audio_level(self, level: float) -> None:
+        """Коллбэк из фонового потока VoicePipeline при обновлении громкости входящего звука."""
+        self.voice_bridge.audio_level_received.emit(level)
 
     def handle_transcription(self, text: str) -> None:
         """
@@ -213,65 +227,88 @@ class GupkaCommanderApp(QObject):
         if not clean_text:
             return ""
 
-        # Добавляем сообщение пользователя в историю
-        self.spotlight_bar.add_chat_message("user", clean_text, status="done")
-        self.spotlight_bar.clear_input()
-
-        self._current_response_streamed = False
-        self._audio_streamed = False
-
-        # Определение намерения для логирования и маршрутизации
-        route = self.intent_router.route(clean_text)
-        intent_name = str(route.intent.value if hasattr(route.intent, "value") else route.intent)
-
-        # Логируем шаг пользователя в базу долговременной памяти
-        try:
-            self.memory_manager.log_turn(role="user", text=clean_text, intent=intent_name)
-        except Exception as exc:
-            logger.warning("Ошибка логирования хода пользователя в память: %s", exc)
+        # Защита от одновременного выполнения команд и реентрантности
+        with self._execution_lock:
+            if self._is_executing_command:
+                logger.warning("Команда уже выполняется, повторный запрос отклонен: %s", clean_text)
+                msg = "Предыдущая операция еще не завершена. Пожалуйста, подождите."
+                self.spotlight_bar.add_chat_message("assistant", msg, status="error")
+                return msg
+            self._is_executing_command = True
 
         try:
-            # Выполняем команду через маршрутизатор и исполнители
-            response_text = self._dispatch_command(clean_text, route=route)
-        except InterruptedError:
-            logger.warning("Исполнение команды прервано пользователем (FailSafe).")
-            response_text = "Операция экстренно прервана пользователем (FailSafe)."
-            self._current_response_streamed = False
-            self._audio_streamed = True
-        except DangerousCommandError as exc:
-            logger.warning("Попытка выполнения небезопасной команды: %s", exc)
-            response_text = f"Команда заблокирована системой безопасности: {exc}"
-            self._current_response_streamed = False
-        except ActionFailedError as exc:
-            logger.warning("Действие интерфейса не удалось: %s", exc)
-            response_text = f"Не удалось выполнить визуальное действие: {exc}"
-            self._current_response_streamed = False
-        except Exception as exc:
-            logger.error("Ошибка при обработке команды '%s': %s", clean_text, exc)
-            response_text = f"Произошла ошибка при выполнении: {exc}"
-            self._current_response_streamed = False
-
-        # Логируем ответ ассистента в базу долговременной памяти
-        try:
-            self.memory_manager.log_turn(role="assistant", text=response_text, intent=intent_name)
-        except Exception as exc:
-            logger.warning("Ошибка логирования ответа ассистента в память: %s", exc)
-
-        # Добавляем ответ ассистента в историю, если он не был добавлен потоком
-        if not self._current_response_streamed:
-            self.spotlight_bar.add_chat_message("assistant", response_text, status="done")
-
-        # Озвучиваем ответ через TTS, если не было потокового воспроизведения
-        if not self._audio_streamed and self.enable_voice and not self.tray_manager.is_muted():
+            # Сброс флага аварийного прерывания FailSafe перед запуском команды
             try:
-                self.voice_pipeline.speak(response_text, blocking=False)
+                self.failsafe_monitor.reset_abort()
             except Exception as exc:
-                logger.warning("Ошибка при воспроизведении ответа через TTS: %s", exc)
+                logger.debug("Ошибка сброса FailSafe: %s", exc)
 
-        self._current_response_streamed = False
-        self._audio_streamed = False
+            # Добавляем сообщение пользователя в историю
+            self.spotlight_bar.add_chat_message("user", clean_text, status="done")
+            self.spotlight_bar.clear_input()
 
-        return response_text
+            self._current_response_streamed = False
+            self._audio_streamed = False
+
+            # Определение намерения для логирования и маршрутизации
+            route = self.intent_router.route(clean_text)
+            intent_name = str(
+                route.intent.value if hasattr(route.intent, "value") else route.intent
+            )
+
+            # Логируем шаг пользователя в базу долговременной памяти
+            try:
+                self.memory_manager.log_turn(role="user", text=clean_text, intent=intent_name)
+            except Exception as exc:
+                logger.warning("Ошибка логирования хода пользователя в память: %s", exc)
+
+            try:
+                # Выполняем команду через маршрутизатор и исполнители
+                response_text = self._dispatch_command(clean_text, route=route)
+            except InterruptedError:
+                logger.warning("Исполнение команды прервано пользователем (FailSafe).")
+                response_text = "Операция экстренно прервана пользователем (FailSafe)."
+                self._current_response_streamed = False
+                self._audio_streamed = True
+            except DangerousCommandError as exc:
+                logger.warning("Попытка выполнения небезопасной команды: %s", exc)
+                response_text = f"Команда заблокирована системой безопасности: {exc}"
+                self._current_response_streamed = False
+            except ActionFailedError as exc:
+                logger.warning("Действие интерфейса не удалось: %s", exc)
+                response_text = f"Не удалось выполнить визуальное действие: {exc}"
+                self._current_response_streamed = False
+            except Exception as exc:
+                logger.error("Ошибка при обработке команды '%s': %s", clean_text, exc)
+                response_text = f"Произошла ошибка при выполнении: {exc}"
+                self._current_response_streamed = False
+
+            # Логируем ответ ассистента в базу долговременной памяти
+            try:
+                self.memory_manager.log_turn(
+                    role="assistant", text=response_text, intent=intent_name
+                )
+            except Exception as exc:
+                logger.warning("Ошибка логирования ответа ассистента в память: %s", exc)
+
+            # Добавляем ответ ассистента в историю, если он не был добавлен потоком
+            if not self._current_response_streamed:
+                self.spotlight_bar.add_chat_message("assistant", response_text, status="done")
+
+            # Озвучиваем ответ через TTS, если не было потокового воспроизведения
+            if not self._audio_streamed and self.enable_voice and not self.tray_manager.is_muted():
+                try:
+                    self.voice_pipeline.speak(response_text, blocking=False)
+                except Exception as exc:
+                    logger.warning("Ошибка при воспроизведении ответа через TTS: %s", exc)
+
+            self._current_response_streamed = False
+            self._audio_streamed = False
+
+            return response_text
+        finally:
+            with self._execution_lock:
+                self._is_executing_command = False
 
     def _dispatch_command(self, text: str, route: RouteResult | None = None) -> str:
         """
@@ -561,31 +598,42 @@ class GupkaCommanderApp(QObject):
 
     def _fallback_click_with_vision(self, elem_name: str, raw_text: str) -> str:
         """Каскадный резервный клик через VisionAgent при отсутствии элемента в дереве UIA."""
-        logger.info("Вызов VisionAgent.click_at для элемента '%s' (fallback).", elem_name)
+        logger.info("Вызов VisionAgent для элемента '%s' (fallback).", elem_name)
         try:
             image_b64 = ""
             try:
                 frame_info = self.vision_agent.inspect_screen()
                 image_b64 = str(frame_info.get("image_b64") or "")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Не удалось получить снимок экрана: %s", exc)
 
-            target_x, target_y = 500, 500
-            if image_b64:
-                query = raw_text or f"кликни {elem_name}"
-                planned = self.llm_client.plan_actions(query, image_b64=image_b64)
-                for act in planned:
-                    if act.get("tool") == "click_screen":
-                        coords = act.get("parameters", {})
-                        target_x = int(coords.get("x", 500))
-                        target_y = int(coords.get("y", 500))
+            if not image_b64:
+                return f"Элемент '{elem_name}' не найден на экране через визуальный анализ."
+
+            target_x: int | None = None
+            target_y: int | None = None
+
+            query = raw_text or f"кликни {elem_name}"
+            planned = self.llm_client.plan_actions(query, image_b64=image_b64)
+            for act in planned:
+                if act.get("tool") == "click_screen":
+                    coords = act.get("parameters", {})
+                    if "x" in coords and "y" in coords:
+                        target_x = int(coords["x"])
+                        target_y = int(coords["y"])
                         break
+
+            if target_x is None or target_y is None:
+                logger.info(
+                    "Визуальный анализ не определил координаты для элемента '%s'.", elem_name
+                )
+                return f"Элемент '{elem_name}' не найден на экране через визуальный анализ."
 
             self.vision_agent.click_at(target_x, target_y, verify_change=False)
             return f"Элемент '{elem_name}' нажат через визуальный агент (Vision Fallback)."
         except Exception as exc:
             logger.warning("Ошибка при визуальном клике VisionAgent: %s", exc)
-            return f"Элемент '{elem_name}' нажат через визуальный fallback."
+            return f"Элемент '{elem_name}' не найден на экране через визуальный анализ."
 
     def _setup_stream_card(self) -> Any | None:
         """Создает карточку ассистента в ChatDrawer для отображения живой печати."""
@@ -649,9 +697,6 @@ class GupkaCommanderApp(QObject):
                 tokens.append(chunk)
                 if card is not None and hasattr(card, "set_text"):
                     card.set_text("".join(tokens))
-                    app_inst = QApplication.instance()
-                    if app_inst is not None:
-                        app_inst.processEvents()
 
                 for sentence in accumulator.feed(chunk):
                     if can_speak:
@@ -889,15 +934,29 @@ class GupkaCommanderApp(QObject):
             muted: True, если микрофон отключен.
         """
         logger.info("Состояние микрофона изменено: muted=%s", muted)
+        try:
+            if hasattr(self.voice_pipeline, "set_muted"):
+                self.voice_pipeline.set_muted(muted)
+        except Exception as exc:
+            logger.warning("Ошибка установки режима mute в VoicePipeline: %s", exc)
+
         if muted:
             try:
-                self.voice_pipeline.synthesizer.stop()
+                synth = getattr(self.voice_pipeline, "synthesizer", None)
+                if synth is not None and hasattr(synth, "stop"):
+                    synth.stop()
             except Exception as exc:
                 logger.debug("Ошибка при остановке синтезатора: %s", exc)
 
     def start(self) -> None:
         """Запуск всех подсистем приложения."""
         logger.info("Запуск подсистем GupkaCommander...")
+
+        # 0. Монитор безопасности FailSafe
+        try:
+            self.failsafe_monitor.start()
+        except Exception as exc:
+            logger.warning("Не удалось запустить FailSafeMonitor: %s", exc)
 
         # 1. Системный трей
         if self.enable_tray:
@@ -920,7 +979,16 @@ class GupkaCommanderApp(QObject):
 
     def shutdown(self) -> None:
         """Корректное завершение работы и освобождение системных ресурсов."""
+        if self._is_shutting_down:
+            return
+        self._is_shutting_down = True
         logger.info("Остановка GupkaCommander...")
+
+        # 0. Остановка монитора безопасности FailSafe
+        try:
+            self.failsafe_monitor.stop()
+        except Exception as exc:
+            logger.debug("Ошибка при остановке FailSafeMonitor: %s", exc)
 
         if self.enable_hotkey:
             try:

@@ -150,6 +150,21 @@ class TestWaveformWidgetHeadless:
         assert not widget._timer.isActive()
         widget.deleteLater()
 
+    def test_hide_and_show_events_control_timer(self, qapp: QApplication) -> None:
+        """Проверка остановки таймера анимации при hideEvent и возобновления при showEvent."""
+        widget = WaveformWidget()
+        widget.show()
+        assert widget._timer.isActive()
+
+        widget.hide()
+        assert not widget._timer.isActive()
+
+        widget.show()
+        assert widget._timer.isActive()
+
+        widget.stop_animation()
+        widget.deleteLater()
+
     def test_painting_all_states_on_image(self, qapp: QApplication) -> None:
         """Проверка рендеринга каждого из 4 состояний на виртуальный QImage."""
         widget = WaveformWidget()

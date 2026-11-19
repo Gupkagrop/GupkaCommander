@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from core.memory.db import get_utc_now_iso, init_database
+from core.memory.db import get_utc_now_iso, init_database, transaction
 
 
 def test_init_database_in_memory() -> None:
@@ -23,6 +23,10 @@ def test_init_database_in_memory() -> None:
         assert "notes" in tables
         assert "notes_fts" in tables
         assert "conversations" in tables
+
+        busy_cursor = conn.execute("PRAGMA busy_timeout;")
+        busy_timeout: int = int(busy_cursor.fetchone()[0])
+        assert busy_timeout == 5000
     finally:
         conn.close()
 
@@ -43,6 +47,44 @@ def test_init_database_file_wal_and_fk(tmp_path: Path) -> None:
         wal_cursor = conn.execute("PRAGMA journal_mode;")
         journal_mode: str = str(wal_cursor.fetchone()[0]).lower()
         assert journal_mode == "wal"
+
+        busy_cursor = conn.execute("PRAGMA busy_timeout;")
+        busy_timeout: int = int(busy_cursor.fetchone()[0])
+        assert busy_timeout == 5000
+    finally:
+        conn.close()
+
+
+def test_transaction_rollback_on_exception() -> None:
+    """Проверка отката транзакции при возникновении исключения."""
+    conn = init_database(":memory:")
+    try:
+        now_iso = get_utc_now_iso()
+        # Вставляем первую запись успешно
+        with transaction(conn):
+            conn.execute(
+                """
+                INSERT INTO user_facts (key, value, category, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("key1", "val1", "cat1", now_iso, now_iso),
+            )
+
+        # Пытаемся выполнить транзакцию, в которой происходит ошибка
+        with pytest.raises(RuntimeError):
+            with transaction(conn):
+                conn.execute(
+                    """
+                    INSERT INTO user_facts (key, value, category, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    ("key2", "val2", "cat2", now_iso, now_iso),
+                )
+                raise RuntimeError("Искусственная ошибка")
+
+        # Проверяем, что key2 не зафиксировался в базе
+        cursor = conn.execute("SELECT COUNT(*) FROM user_facts WHERE key = 'key2'")
+        assert cursor.fetchone()[0] == 0
     finally:
         conn.close()
 
