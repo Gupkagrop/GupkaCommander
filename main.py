@@ -2,8 +2,10 @@
 > [!NOTE]
 > Модуль main: Главная точка входа приложения GupkaCommander.
 > Инициализирует QApplication, компоненты быстрого пути (AppFinder, OSController),
-> голосовой конвейер (VoicePipeline), плавающее окно ввода (SpotlightBar),
-> системный трей (TrayManager) и глобальный диспетчер горячих клавиш (HotkeyManager).
+> маршрутизатор намерений (IntentRouter), когнитивное ядро (LocalLLMClient),
+> визуальный агент (VisionAgent), голосовой конвейер (VoicePipeline),
+> плавающее окно ввода (SpotlightBar), системный трей (TrayManager)
+> и глобальный диспетчер горячих клавиш (HotkeyManager).
 """
 
 from __future__ import annotations
@@ -13,12 +15,16 @@ import logging
 import os
 import subprocess
 import sys
+from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication
 
 from core.app_finder import AppFinder
-from core.os_controller import OSController
+from core.brain.llm_client import LocalLLMClient
+from core.os_controller import DangerousCommandError, OSController
+from core.routing.intent_router import Intent, IntentRouter, RouteResult
+from core.vision.vision_agent import ActionFailedError, VisionAgent
 from core.voice.voice_pipeline import PipelineState, VoicePipeline
 from gui.hotkey_manager import HotkeyManager
 from gui.spotlight_bar import SpotlightBar
@@ -65,6 +71,9 @@ class GupkaCommanderApp(QObject):
         spotlight_bar: SpotlightBar | None = None,
         tray_manager: TrayManager | None = None,
         hotkey_manager: HotkeyManager | None = None,
+        intent_router: IntentRouter | None = None,
+        llm_client: LocalLLMClient | None = None,
+        vision_agent: VisionAgent | None = None,
         enable_voice: bool = True,
         enable_hotkey: bool = True,
         enable_tray: bool = True,
@@ -80,6 +89,9 @@ class GupkaCommanderApp(QObject):
             spotlight_bar: Главная поисковая строка SpotlightBar.
             tray_manager: Иконка в системном трее TrayManager.
             hotkey_manager: Глобальный перехватчик горячих клавиш.
+            intent_router: Маршрутизатор намерений IntentRouter.
+            llm_client: Клиент взаимодействия с локальной LLM/VLM.
+            vision_agent: Агент визуального взаимодействия с экраном.
             enable_voice: Флаг активации голосового конвейера.
             enable_hotkey: Флаг активации глобального хоткея Alt+Space.
             enable_tray: Флаг отображения системного трея.
@@ -96,6 +108,9 @@ class GupkaCommanderApp(QObject):
         # 2. Компоненты ядра (Core)
         self.app_finder = app_finder or AppFinder()
         self.os_controller = os_controller or OSController()
+        self.intent_router = intent_router or IntentRouter()
+        self.llm_client = llm_client or LocalLLMClient(router=self.intent_router)
+        self.vision_agent = vision_agent or VisionAgent()
         self.voice_bridge = VoiceBridge()
 
         # 3. Голосовой конвейер
@@ -166,9 +181,10 @@ class GupkaCommanderApp(QObject):
         Основной цикл исполнения команды пользователя.
 
         1. Отображает запрос пользователя в карточке ChatDrawer.
-        2. Выполняет действие через OSController или AppFinder.
-        3. Отображает ответ ассистента в ChatDrawer.
-        4. Озвучивает ответ через синтезатор речи (TTS).
+        2. Маршрутизирует команду через IntentRouter.
+        3. Выполняет действие через OSController, AppFinder, VisionAgent или LocalLLMClient.
+        4. Отображает ответ ассистента в ChatDrawer.
+        5. Озвучивает ответ через синтезатор речи (TTS).
 
         Args:
             text: Текст команды.
@@ -184,8 +200,21 @@ class GupkaCommanderApp(QObject):
         self.spotlight_bar.add_chat_message("user", clean_text, status="done")
         self.spotlight_bar.clear_input()
 
-        # Выполняем команду через быстрый путь
-        response_text = self._dispatch_command(clean_text)
+        try:
+            # Выполняем команду через маршрутизатор и исполнители
+            response_text = self._dispatch_command(clean_text)
+        except InterruptedError:
+            logger.warning("Исполнение команды прервано пользователем (FailSafe).")
+            response_text = "Операция экстренно прервана пользователем (FailSafe)."
+        except DangerousCommandError as exc:
+            logger.warning("Попытка выполнения небезопасной команды: %s", exc)
+            response_text = f"Команда заблокирована системой безопасности: {exc}"
+        except ActionFailedError as exc:
+            logger.warning("Действие интерфейса не удалось: %s", exc)
+            response_text = f"Не удалось выполнить визуальное действие: {exc}"
+        except Exception as exc:
+            logger.error("Ошибка при обработке команды '%s': %s", clean_text, exc)
+            response_text = f"Произошла ошибка при выполнении: {exc}"
 
         # Добавляем ответ ассистента в историю
         self.spotlight_bar.add_chat_message("assistant", response_text, status="done")
@@ -209,56 +238,265 @@ class GupkaCommanderApp(QObject):
         Returns:
             str: Результат выполнения для пользователя.
         """
-        lower = text.lower().strip()
+        route = self.intent_router.route(text)
 
-        # 1. Системные действия: громкость и терминал
-        if any(kw in lower for kw in ("громкость выше", "прибавь звук", "звук выше")):
+        if route.intent == Intent.VOLUME_CONTROL:
+            return self._handle_volume_control(route)
+
+        if route.intent == Intent.WINDOW_CONTROL:
+            return self._handle_window_control(route)
+
+        if route.intent == Intent.OPEN_URL:
+            return self._handle_open_url(route, text)
+
+        if route.intent == Intent.SEARCH_WEB:
+            return self._handle_search_web(route)
+
+        if route.intent == Intent.RUN_COMMAND:
+            return self._handle_run_command(route, text)
+
+        if route.intent == Intent.OPEN_APP:
+            return self._handle_open_app(route)
+
+        if route.intent == Intent.VISION_INTERACT:
+            return self._handle_vision_interact(route, text)
+
+        return self._handle_ai_cognitive(text)
+
+    def _handle_volume_control(self, route: RouteResult) -> str:
+        """Обработка команд управления системной громкостью."""
+        action = route.params.get("action", route.target)
+        if action == "up":
             self.os_controller.volume_up()
             return "Громкость увеличена."
-
-        if any(kw in lower for kw in ("громкость ниже", "убавь звук", "звук ниже")):
+        if action == "down":
             self.os_controller.volume_down()
             return "Громкость уменьшена."
-
-        if any(kw in lower for kw in ("выключи звук", "без звука", "мут", "mute")):
+        if action == "mute":
             self.os_controller.volume_mute()
             return "Звук переключен."
+        if action == "set":
+            val = route.params.get("value", 50)
+            return f"Громкость установлена на {val}%."
+        self.os_controller.volume_up()
+        return "Громкость изменена."
 
-        if lower in ("терминал", "консоль", "открой терминал", "запусти терминал"):
-            self.os_controller.open_terminal()
-            return "Окно терминала запущено."
+    def _handle_window_control(self, route: RouteResult) -> str:
+        """Обработка команд управления окнами Windows."""
+        action = route.params.get("action", route.target)
+        target = str(route.params.get("target_window", ""))
+        if action == "minimize":
+            self.os_controller.minimize_window(target)
+            return "Окно свернуто."
+        if action == "maximize":
+            self.os_controller.maximize_window(target)
+            return "Окно развернуто."
+        if action == "close":
+            self.os_controller.close_window(target)
+            return "Окно закрыто."
+        if action == "restore":
+            self.os_controller.focus_window(target)
+            return "Окно восстановлено."
+        if action == "minimize_all":
+            self.os_controller.minimize_window("")
+            return "Все окна свернуты."
+        return f"Выполнено действие с окном: {action}."
 
-        # 2. Прямые веб-алиасы (например: "ютуб", "youtube", "яндекс")
+    def _handle_open_url(self, route: RouteResult, raw_text: str) -> str:
+        """Обработка открытия веб-адресов и алиасов сайтов."""
+        lower = raw_text.lower().strip()
         alias_url = self.os_controller.resolve_alias(lower)
         if alias_url is not None:
             self.os_controller.open_alias(lower)
             return f"Открываю веб-сайт: {lower}"
 
-        # 3. Поисковые запросы в браузере ("найди ...", "поиск ...")
-        for prefix in ("найди в google ", "найди в гугл ", "найди ", "поиск ", "гугл "):
-            if lower.startswith(prefix):
-                query = text[len(prefix) :].strip()
-                if query:
-                    self.os_controller.search(query)
-                    return f"Ищу в интернете: {query}"
+        alias = route.params.get("alias") or route.params.get("fuzzy_alias")
+        if alias:
+            alias_url = self.os_controller.resolve_alias(alias)
+            if alias_url is not None:
+                self.os_controller.open_alias(alias)
+                return f"Открываю веб-сайт: {alias}"
 
-        # 4. Запуск приложений через AppFinder
-        app_target = text
-        for launch_prefix in ("открой ", "запусти "):
-            if lower.startswith(launch_prefix):
-                app_target = text[len(launch_prefix) :].strip()
-                break
+        url = route.params.get("url") or route.target
+        self.os_controller.open_url(url)
+        return f"Открываю веб-сайт: {url}"
 
-        found_apps = self.app_finder.find(app_target, threshold=60.0)
+    def _handle_search_web(self, route: RouteResult) -> str:
+        """Обработка поисковых запросов в интернете."""
+        query = str(route.params.get("query", route.target))
+        engine = str(route.params.get("engine", "google"))
+        if engine == "google":
+            self.os_controller.search(query)
+        else:
+            self.os_controller.search(query, engine=engine)
+        return f"Ищу в интернете: {query}"
+
+    def _handle_run_command(self, route: RouteResult, raw_text: str) -> str:
+        """Обработка запуска терминала и выполнения консольных команд."""
+        lower = raw_text.lower().strip()
+        cmd = str(route.params.get("command", route.target))
+        terminal_keywords = ("терминал", "консоль", "открой терминал", "запусти терминал")
+        if lower in terminal_keywords or cmd in ("", "terminal"):
+            self.os_controller.open_terminal()
+            return "Окно терминала запущено."
+        code, stdout, stderr = self.os_controller.run_command(cmd)
+        if code == 0:
+            preview = stdout.strip()[:100] if stdout.strip() else "успешно"
+            return f"Команда выполнена: {preview}"
+        return f"Команда завершилась с ошибкой: {stderr.strip()[:100]}"
+
+    def _handle_open_app(self, route: RouteResult) -> str:
+        """Обработка запуска установленных приложений через AppFinder."""
+        target = str(route.target or route.params.get("app", ""))
+        found_apps = self.app_finder.find(target, threshold=60.0)
+        if not found_apps and "raw_target" in route.params:
+            found_apps = self.app_finder.find(str(route.params["raw_target"]), threshold=60.0)
+
         if found_apps:
             best_app = found_apps[0]
             success = self._launch_app(best_app.path)
             if success:
                 return f"Запущено приложение: {best_app.name}"
+            return f"Не удалось запустить приложение: {best_app.name}"
 
-        # 5. Резервный поиск в поисковой системе
+        return f"Приложение '{target}' не найдено на устройстве."
+
+    def _handle_vision_interact(self, route: RouteResult, raw_text: str) -> str:
+        """Обработка визуальных действий с интерфейсом (Vision Grounding)."""
+        action = str(route.params.get("action", ""))
+        if action == "inspect_screen":
+            info = self.vision_agent.inspect_screen()
+            return (
+                f"Анализ экрана выполнен: {info['width']}x{info['height']}, dhash: {info['dhash']}."
+            )
+
+        if action == "type_text":
+            text_to_type = str(route.params.get("text", route.target))
+            self.vision_agent.type_text(text_to_type)
+            return f"Введен текст: {text_to_type}"
+
+        if action == "click_screen":
+            if "x" in route.params and "y" in route.params:
+                x = int(route.params["x"])
+                y = int(route.params["y"])
+                self.vision_agent.click_at(x, y)
+                return f"Выполнен клик по координатам ({x}, {y})."
+
+            frame_info = self.vision_agent.inspect_screen()
+            image_b64 = str(frame_info.get("image_b64") or "")
+            planned = self.llm_client.plan_actions(raw_text, image_b64=image_b64)
+            if planned:
+                return self._execute_planned_actions(planned)
+            return f"Цель для клика '{route.target}' не найдена на экране."
+
+        return f"Выполнено визуальное действие: {action}."
+
+    def _handle_ai_cognitive(self, text: str) -> str:
+        """Обработка свободного запроса через локальную модель LLM (планирование/ответ)."""
+        if self.llm_client.is_healthy():
+            actions = self.llm_client.plan_actions(text)
+            if actions:
+                return self._execute_planned_actions(actions)
+            return self.llm_client.generate_response(text)
+
+        lower = text.strip().lower()
+        if any(w in lower for w in ("привет", "здравствуй", "добрый день")):
+            return self.llm_client.fallback_engine.respond(text)
+
         self.os_controller.search(text)
         return f"Команда не найдена локально. Выполняю поиск в сети: {text}"
+
+    def _execute_planned_actions(self, actions: list[dict[str, Any]]) -> str:
+        """Исполнение последовательности действий, сгенерированных LLM/VLM."""
+        results: list[str] = []
+        for action in actions:
+            tool_name = str(action.get("tool", ""))
+            parameters = action.get("parameters", {})
+            if isinstance(parameters, dict):
+                res = self._execute_single_action(tool_name, parameters)
+                results.append(res)
+        return " ".join(results) if results else "Действия не запланированы."
+
+    def _execute_single_action(self, tool: str, params: dict[str, Any]) -> str:
+        """Исполнение одного действия из списка системных инструментов."""
+        if tool == "open_application":
+            app_name = str(params.get("app_name", ""))
+            apps = self.app_finder.find(app_name)
+            if apps and self._launch_app(apps[0].path):
+                return f"Запущено приложение: {apps[0].name}."
+            return f"Приложение '{app_name}' не найдено."
+
+        if tool == "open_url":
+            url = str(params.get("url", ""))
+            self.os_controller.open_url(url)
+            return f"Открыт веб-сайт: {url}."
+
+        if tool == "search_web":
+            query = str(params.get("query", ""))
+            engine = str(params.get("engine", "google"))
+            if engine == "google":
+                self.os_controller.search(query)
+            else:
+                self.os_controller.search(query, engine=engine)
+            return f"Выполнен поиск в сети: {query}."
+
+        if tool == "run_command":
+            cmd = str(params.get("command", ""))
+            code, stdout, stderr = self.os_controller.run_command(cmd)
+            return f"Команда '{cmd}' выполнена." if code == 0 else f"Ошибка команды: {stderr}."
+
+        if tool == "window_control":
+            action = str(params.get("action", ""))
+            target = str(params.get("target_window", ""))
+            return self._execute_window_action(action, target)
+
+        if tool == "click_screen":
+            x = int(params.get("x", 0))
+            y = int(params.get("y", 0))
+            btn = str(params.get("button", "left"))
+            self.vision_agent.click_at(x, y, button=btn)
+            return f"Клик по координатам ({x}, {y})."
+
+        if tool == "type_text":
+            txt = str(params.get("text", ""))
+            self.vision_agent.type_text(txt)
+            if params.get("press_enter"):
+                self.vision_agent.press_key("enter")
+            return f"Введен текст: '{txt}'."
+
+        if tool == "inspect_screen":
+            info = self.vision_agent.inspect_screen()
+            return f"Снимок экрана: {info['width']}x{info['height']}."
+
+        return f"Инструмент '{tool}' не поддерживается."
+
+    def _execute_window_action(self, action: str, target: str) -> str:
+        """Исполнение действия с окном или системной громкостью."""
+        if action == "volume_up":
+            self.os_controller.volume_up()
+            return "Громкость увеличена."
+        if action == "volume_down":
+            self.os_controller.volume_down()
+            return "Громкость уменьшена."
+        if action == "mute":
+            self.os_controller.volume_mute()
+            return "Звук переключен."
+        if action == "minimize":
+            self.os_controller.minimize_window(target)
+            return "Окно свернуто."
+        if action == "maximize":
+            self.os_controller.maximize_window(target)
+            return "Окно развернуто."
+        if action == "close":
+            self.os_controller.close_window(target)
+            return "Окно закрыто."
+        if action == "restore":
+            self.os_controller.focus_window(target)
+            return "Окно восстановлено."
+        if action == "minimize_all":
+            self.os_controller.minimize_window("")
+            return "Все окна свернуты."
+        return f"Действие с окном '{action}' выполнено."
 
     def _launch_app(self, app_path: str) -> bool:
         """

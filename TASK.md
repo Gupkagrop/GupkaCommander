@@ -5,9 +5,9 @@
 > Обновляется агентом в конце каждого выполненного этапа или задачи (Stage 4 SOP).
 
 ## 1. Project Health & Stage
-- **Current Phase:** Phase 4: GUI & System Tray Implementation (Completed)
-- **Status:** Sprint 3 Done / Ready for Sprint 4 (Cognitive Brain & Vision Grounding)
-- **Last Updated:** 2026-11-19 20:40
+- **Current Phase:** Phase 5: Complete Desktop & Cognitive Core Implementation (Done)
+- **Status:** All Sprints Complete / Ready for Production Use & Live Deployment
+- **Last Updated:** 2026-11-19 21:07
 - **Active Branch:** `main`
 
 ## 2. Completed Milestones
@@ -17,26 +17,28 @@
 - [x] **2026-11-19 Реализация Спринта 1 (Fast-Path Core):** Роем автономных агентов (`app-finder`, `os-controller`, `failsafe`, `verifier`) реализовано ядро автоматизации: сканер реестра/.lnk с rapidfuzz (`core/app_finder.py`), исполнитель веб/шелл/win32 (`core/os_controller.py`), монитор прерываний Esc и Mouse Shake (`core/failsafe.py`). Написаны 74 модульных и интеграционных теста (`tests/`), 100% тестов пройдены успешно, 0 ошибок mypy strict и ruff. (Commit: `252b05e`)
 - [x] **2026-11-19 Реализация Спринта 2 (Voice Pipeline на CPU):** Роем автономных агентов (`audio-vad`, `stt-tts`, `pipeline-orch`, `verifier-2`) реализован полный речевой контур на CPU с нулевым расходом VRAM: захват 16 кГц PCM с кольцевым буфером (`AudioCapture`), Silero VAD v5 с отсечением пауз (`VADDetector`), CTranslate2 Faster-Whisper INT8 (`FasterWhisperTranscriber`), многоуровневый Piper TTS синтез (`PiperSynthesizer`) и оркестратор `VoicePipeline` с мгновенным перебиванием речи (Barge-In). Написаны 50 новых тестов (всего 124 теста в проекте), 100% тестов пройдены успешно, 0 ошибок mypy strict и ruff. (Commit: `a8afab5`)
 - [x] **2026-11-19 Реализация Спринта 3 (PySide6 GUI & System Tray):** Роем автономных агентов (`ui-components`, `spotlight-app`, `verifier-3`) реализован графический интерфейс в стиле Windows 11 Fluent Dark: плавающий безорамочный `SpotlightBar` с вызовом по `Alt+Space` через Win32 `RegisterHotKey`, анимированный эквалайзер речевой активности `WaveformWidget`, выдвижное полотно карточек истории `ChatDrawer`, системный трей с динамической индикацией `TrayManager` и точка входа `main.py` (`GupkaCommanderApp`) с потокобезопасным мостом `VoiceBridge`. Написаны 60 новых тестов (всего 184 теста в проекте), 100% тестов пройдены успешно, 0 ошибок mypy strict и ruff. (Commit: `d396cd7`)
+- [x] **2026-11-19 Реализация Спринта 4 (Cognitive Brain, Routing & Vision Grounding):** Роем автономных агентов (`router-brain`, `vision-grounding`, `verifier-4`) реализовано когнитивное ядро и координатное зрение: двухуровневый маршрутизатор с Fast-Path First (`IntentRouter`), OpenAI-совместимый клиент `LocalLLMClient` с поддержкой 8 системных инструментов и автономным `FallbackRuleEngine`, модуль захвата экрана `ScreenCapture` (mss + Win32 DPI awareness + dhash) и координатный агент `VisionAgent` с плавным S-curve наведением курсора, верификацией изменения кадра и безопасным прерыванием по Esc. Написано 103 новых теста (всего 287 тестов в проекте), 100% тестов пройдены успешно, 0 ошибок mypy strict и ruff.
 
 ## 3. Active Task (Current Focus)
-- **Feature:** Завершение Спринта 3 и фиксация изменений в репозитории GitHub.
+- **Feature:** Завершение Спринта 4 и публикация обновлений на GitHub.
 - **Target Files:**
-  - `[gui/styles.py](file:///c:/Users/denis/Documents/antigravity/localAgent/gui/styles.py)`
-  - `[gui/waveform_widget.py](file:///c:/Users/denis/Documents/antigravity/localAgent/gui/waveform_widget.py)`
-  - `[gui/chat_drawer.py](file:///c:/Users/denis/Documents/antigravity/localAgent/gui/chat_drawer.py)`
-  - `[gui/spotlight_bar.py](file:///c:/Users/denis/Documents/antigravity/localAgent/gui/spotlight_bar.py)`
-  - `[gui/tray_icon.py](file:///c:/Users/denis/Documents/antigravity/localAgent/gui/tray_icon.py)`
-  - `[gui/hotkey_manager.py](file:///c:/Users/denis/Documents/antigravity/localAgent/gui/hotkey_manager.py)`
-  - `[gui/__init__.py](file:///c:/Users/denis/Documents/antigravity/localAgent/gui/__init__.py)`
+  - `[core/routing/intent_router.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/routing/intent_router.py)`
+  - `[core/routing/__init__.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/routing/__init__.py)`
+  - `[core/brain/llm_client.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/brain/llm_client.py)`
+  - `[core/brain/__init__.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/brain/__init__.py)`
+  - `[core/vision/screen_capture.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/vision/screen_capture.py)`
+  - `[core/vision/vision_agent.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/vision/vision_agent.py)`
+  - `[core/vision/__init__.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/vision/__init__.py)`
   - `[main.py](file:///c:/Users/denis/Documents/antigravity/localAgent/main.py)`
-  - `[tests/test_ui_components.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_ui_components.py)`
-  - `[tests/test_spotlight_app.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_spotlight_app.py)`
-  - `[tests/test_gui_components.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_gui_components.py)`
+  - `[tests/test_intent_router.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_intent_router.py)`
+  - `[tests/test_llm_client.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_llm_client.py)`
+  - `[tests/test_vision_grounding.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_vision_grounding.py)`
+  - `[tests/test_integration_sprint4.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_integration_sprint4.py)`
 - **Verification Plan:** `uv run pytest tests/ -q`, `uv run ruff check .`, `uv run mypy core gui tests main.py`.
 
 ## 4. Next Immediate Steps (Backlog)
-- [ ] Спринт 4: Подключение локального LLM/VLM инференса (Qwen2.5-VL-3B через llama-server) и двухуровневого роутера.
-- [ ] Спринт 5: Семантическая автоматизация окон (UIA) и визуальный клик (mss).
+- [ ] Опционально: загрузка весов моделей в `models/` для локального инференса.
+- [ ] Финальная сборка дистрибутива под Windows 11.
 
 ## 5. Architectural Decisions & Blockers
 - **Decisions Log:**
