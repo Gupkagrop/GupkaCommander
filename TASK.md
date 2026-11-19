@@ -20,25 +20,14 @@
 - [x] **2026-11-19 Реализация Спринта 4 (Cognitive Brain, Routing & Vision Grounding):** Роем автономных агентов (`router-brain`, `vision-grounding`, `verifier-4`) реализовано когнитивное ядро и координатное зрение: двухуровневый маршрутизатор с Fast-Path First (`IntentRouter`), OpenAI-совместимый клиент `LocalLLMClient` с поддержкой 8 системных инструментов и автономным `FallbackRuleEngine`, модуль захвата экрана `ScreenCapture` (mss + Win32 DPI awareness + dhash) и координатный агент `VisionAgent` с плавным S-curve наведением курсора, верификацией изменения кадра и безопасным прерыванием по Esc. Написано 103 новых теста (всего 287 тестов в проекте), 100% тестов пройдены успешно, 0 ошибок mypy strict и ruff. (Commit: `32794c4`)
 
 ## 3. Active Task (Current Focus)
-- **Feature:** Завершение Спринта 4 и публикация обновлений на GitHub.
-- **Target Files:**
-  - `[core/routing/intent_router.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/routing/intent_router.py)`
-  - `[core/routing/__init__.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/routing/__init__.py)`
-  - `[core/brain/llm_client.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/brain/llm_client.py)`
-  - `[core/brain/__init__.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/brain/__init__.py)`
-  - `[core/vision/screen_capture.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/vision/screen_capture.py)`
-  - `[core/vision/vision_agent.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/vision/vision_agent.py)`
-  - `[core/vision/__init__.py](file:///c:/Users/denis/Documents/antigravity/localAgent/core/vision/__init__.py)`
-  - `[main.py](file:///c:/Users/denis/Documents/antigravity/localAgent/main.py)`
-  - `[tests/test_intent_router.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_intent_router.py)`
-  - `[tests/test_llm_client.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_llm_client.py)`
-  - `[tests/test_vision_grounding.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_vision_grounding.py)`
-  - `[tests/test_integration_sprint4.py](file:///c:/Users/denis/Documents/antigravity/localAgent/tests/test_integration_sprint4.py)`
+- **Feature:** Все 4 основных спринта архитектуры GupkaCommander успешно реализованы, протестированы (287/287 green) и синхронизированы с GitHub (`origin/main`).
+- **Status:** Готовность к развертыванию, запуску и боевому тестированию.
 - **Verification Plan:** `uv run pytest tests/ -q`, `uv run ruff check .`, `uv run mypy core gui tests main.py`.
 
 ## 4. Next Immediate Steps (Backlog)
-- [ ] Опционально: загрузка весов моделей в `models/` для локального инференса.
-- [ ] Финальная сборка дистрибутива под Windows 11.
+- [ ] Разработка утилит развертывания (`scripts/download_models.py`, `scripts/run_llama_server.bat`).
+- [ ] Создание ярлыка запуска на Рабочем столе и в автозагрузке Windows (`scripts/create_shortcut.py`).
+- [ ] Финальная верификация живого запуска (`uv run python main.py`).
 
 ## 5. Architectural Decisions & Blockers
 - **Decisions Log:**
@@ -46,5 +35,6 @@
   - `2026-11-19`: Весь голосовой стек (Silero VAD, Faster-Whisper, Piper TTS) размещен на CPU, чтобы освободить весь 8GB VRAM буфер под компактную мультимодальную модель (Qwen2.5-VL-3B Q4).
   - `2026-11-19`: Реализован интерфейс Windows 11 Fluent Dark с мягкими скруглениями (14px) и выдвижной панелью истории (Chat Drawer).
   - `2026-11-19`: Вызов Spotlight Bar привязан к нативному Win32 `RegisterHotKey` (Alt+Space) с автоцентрированием на активном мониторе и возвратом фокуса.
+  - `2026-11-19`: Реализовано когнитивное зрение и планирование действий через OpenAI-совместимый протокол со встроенным FallbackRuleEngine для автономной работы без активного LLM-сервера.
 - **Known Blockers / Warnings:**
-  - Нет блокеров. Ядро, речевой контур и GUI полностью протестированы (184/184 тестов зелёные).
+  - Нет блокеров. Все 4 спринта полностью завершены и протестированы (287/287 тестов зеленые).
