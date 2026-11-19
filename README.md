@@ -7,10 +7,13 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011-0078D4.svg?logo=windows11&logoColor=white)](https://www.microsoft.com/windows)
 [![Python Version](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![GUI Framework](https://img.shields.io/badge/GUI-PySide6%20%28Qt%206%29-41CD52.svg?logo=qt&logoColor=white)](https://doc.qt.io/qtforpython-6/)
+[![Tests](https://img.shields.io/badge/Tests-570%20Passed-brightgreen.svg)](#-тестирование-и-сенсоры-качества)
+[![Code Style](https://img.shields.io/badge/Code%20Style-Ruff-black.svg?logo=ruff&logoColor=white)](https://github.com/astral-sh/ruff)
+[![Type Checking](https://img.shields.io/badge/Type%20Checking-mypy%20strict-blue.svg)](https://mypy-lang.org/)
 [![Hardware Profile](https://img.shields.io/badge/GPU%20Target-RTX%205050%20%7C%208GB%20VRAM-76B900.svg?logo=nvidia&logoColor=white)](#-аппаратный-профиль-и-бюджет-памяти)
 [![Privacy](https://img.shields.io/badge/Privacy-100%25%20Local-success.svg)](#-принципы-проекта)
 [![Fast-Path](https://img.shields.io/badge/Latency-%3C%2020ms%20Fast--Path-orange.svg)](#-матрица-уровней-исполнения-4-tier-pyramid)
-[![License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
+[![Distribution](https://img.shields.io/badge/Distribution-Standalone%20.exe%20(898MB)-blueviolet.svg)](#-автономная-дистрибуция-и-инсталлятор-вектор-4)
 
 <p align="center">
   <b>Приватность • 100% Офлайн-инференс • Голосовой контур на CPU • Сверхбыстрый Fast-Path • Экранное зрение (VLM)</b>
@@ -110,6 +113,12 @@ flowchart TD
 uv run python main.py
 ```
 
+### Вариант 4: Автономный запуск без Python (.exe)
+GupkaCommander может работать полностью автономно без установленного Python и `uv`:
+* **Сборка автономного пакета в 1 клик:** запустите `build.bat` — скрипт скомпилирует `dist/GupkaCommander/GupkaCommander.exe` (70.48 MB, общий пакет 898 MB) со всеми библиотеками PySide6, CTranslate2, ONNXRuntime и 385 таблицами русской фонетики `espeak-ng-data`.
+* **Автономный запуск:** запустите `dist/GupkaCommander/GupkaCommander.exe` (или ярлык на Рабочем столе).
+* **Сборка инсталлятора Inno Setup:** запустите `uv run python scripts/build_installer.py` для создания единого мастера установки `Setup.exe`.
+
 > [!TIP]
 > * **Горячая клавиша:** Нажмите **`Alt+Space`** в любом месте Windows, чтобы открыть строку ввода.
 > * **Аварийный сброс:** Нажмите **`Esc`** или покачайте мышь для мгновенной остановки действий (Fail-Safe).
@@ -186,8 +195,10 @@ sequenceDiagram
 GupkaCommander/
 ├── start.bat                       # 🚀 Запуск приложения в 1 клик
 ├── setup.bat                       # 🛠️ Мастер первоначальной настройки под ключ
+├── build.bat                       # 📦 Сборка автономного .exe и инсталлятора
 ├── start_quiet.vbs                 # 🤫 Бесшумный запуск в трей (без консольного окна)
 ├── start.ps1                       # 💻 PowerShell скрипт запуска (-Background, -Setup)
+├── GupkaCommander.spec             # ⚙️ PyInstaller спецификация автономной сборки
 ├── .gitignore                      # Исключения системных и временных файлов
 ├── .repomixignore                  # Правила упаковки AST-сборки Repomix
 ├── AGENTS.md                       # Контракт разработки и правила для ИИ-агентов
@@ -196,14 +207,18 @@ GupkaCommander/
 ├── pyproject.toml                  # Конфигурация uv, ruff, mypy, pytest
 ├── .env.example                    # Документация переменных окружения
 ├── assets/                         # Фирменные иконки (Fluent Dark .ico / .png)
-├── scripts/                        # Скрипты загрузки моделей, ярлыков и llama-server
+├── scripts/                        # Скрипты загрузки моделей, сборки и llama-server
 │   ├── download_models.py          # Загрузчик весов VAD, Piper, Whisper, VLM
 │   ├── generate_icon.py            # Генератор многослойной иконки Windows
 │   ├── create_shortcut.py          # Создание ярлыков на Рабочем столе и в автозагрузке
-│   └── run_llama_server.bat        # Запуск GPU сервера инференса под RTX 5050
+│   ├── run_llama_server.bat        # Запуск GPU сервера инференса под RTX 5050
+│   ├── build_executable.py         # Автоматическая сборка автономного .exe (PyInstaller)
+│   ├── build_installer.py          # Компиляция Inno Setup инсталлятора (Setup.exe)
+│   └── installer.iss               # Спецификация инсталлятора Windows (user/admin)
 ├── config/
 │   ├── settings.json               # Параметры моделей, хоткеев и звука
-│   └── commands.json               # Базовые алиасы программ и сайтов
+│   ├── commands.json               # Базовые алиасы программ и сайтов
+│   └── memory.db                   # Долговременная память SQLite WAL (FTS5)
 ├── docs/                           # Инженерная документация
 │   └── architecture/
 │       ├── system_overview.md      # Обзор архитектуры ядра и IPC
@@ -212,20 +227,23 @@ GupkaCommander/
 │       ├── voice_pipeline.md       # Спецификация голосового контура (CPU)
 │       └── vision_and_routing.md   # Спецификация роутера и экранного зрения
 ├── core/                           # Модули автоматизации ОС
-│   ├── app_finder.py               # Сканер приложений и .lnk
-│   ├── os_controller.py            # Управление URL, консолью, окнами и звуком
+│   ├── paths.py                    # Виртуализация путей (_MEIPASS vs %LOCALAPPDATA%)
+│   ├── app_finder.py               # Сканер приложений и .lnk (rapidfuzz)
+│   ├── os_controller.py            # Управление URL, шеллом, окнами и звуком
 │   ├── failsafe.py                 # Аварийный монитор (Esc / Mouse Shake)
-│   ├── brain/                      # Когнитивное планирование (LLM Client)
+│   ├── brain/                      # Когнитивное планирование (LocalLLMClient SSE)
 │   ├── routing/                    # Двухуровневый Fast-Path First роутер
-│   ├── vision/                     # Экранный захват и координатный клик
-│   └── voice/                      # Речевой контур (VAD, STT, TTS, Barge-In)
-├── gui/                            # Компоненты интерфейса (PySide6)
+│   ├── uia/                        # Microsoft UI Automation (Tier 1 UIA контроллер)
+│   ├── memory/                     # Долговременная память SQLite WAL и FTS5 заметки
+│   ├── vision/                     # Экранный захват (mss + DPI) и координатный клик
+│   └── voice/                      # Речевой контур (VAD, Whisper, Piper, Streaming)
+├── gui/                            # Компоненты интерфейса (PySide6 Fluent Dark)
 │   ├── spotlight_bar.py            # Плавающая поисковая строка
-│   ├── waveform_widget.py          # Анимированный эквалайзер
-│   ├── chat_drawer.py              # Выдвижная история сообщений
+│   ├── waveform_widget.py          # Анимированный эквалайзер речевой активности
+│   ├── chat_drawer.py              # Выдвижная история сообщений и живая печать
 │   ├── hotkey_manager.py           # Win32 глобальный хоткей Alt+Space
 │   └── tray_icon.py                # Системный трей Windows
-└── tests/                          # 335 тестов верификации
+└── tests/                          # 570 тестов детерминированной верификации
 ```
 
 ---
@@ -239,7 +257,7 @@ GupkaCommander/
 - [x] **Фаза 2: Скелет ядра и Fast-Path автоматизация**
   - [x] Быстрый сканер софта (Registry + `.lnk` + `rapidfuzz`)
   - [x] Запуск браузера, веб-ссылок и поисковых запросов
-  - [x] Модуль работы с терминалом и консолью Windows
+  - [x] Модуль работы с терминалом и консолью Windows с усиленной защитой
   - [x] Модуль управления окнами (Win32) и системным звуком
 - [x] **Фаза 3: Графический интерфейс и голосовой контур**
   - [x] Потоковый VAD + Faster-Whisper + Piper TTS на CPU (Спринт 2)
@@ -250,6 +268,35 @@ GupkaCommander/
   - [x] Подключение локального инференса Qwen2.5-VL через llama-server (OpenAI API)
   - [x] Двухуровневый роутер (детерминированный Fast-Path vs Tool Calling)
   - [x] Семантическая автоматизация и визуальный клик (mss + DPI awareness)
+- [x] **Фаза 5: Развертывание и Векторы Развития**
+  - [x] **Вектор 1 (Tier 1 UIA):** Нативное управление элементами Windows без движения мыши
+  - [x] **Вектор 2 (Streaming TTS):** Параллельный потоковый синтез с задержкой звука < 300 мс
+  - [x] **Вектор 3 (Episodic Memory):** Долговременная память SQLite WAL, факты и FTS5-заметки
+  - [x] **Вектор 4 (Distribution):** Автономный пакет PyInstaller (898 MB) и инсталлятор Inno Setup
+- [x] **Фаза 6: Полировка и Финальный Аудит (Dual-Model Gate)**
+  - [x] Независимый аудит **Claude Sonnet 5.5** (9.5/10) и **Gemini 4 Argon** (9.8/10)
+  - [x] Устранение векторов обхода (EncodedCommand, regex format, ctypes x64)
+  - [x] Все 570 тестов зеленые, 0 предупреждений ruff, 0 ошибок mypy strict
+
+---
+
+## 🧪 Тестирование и сенсоры качества (Harness)
+
+Проект полностью защищен детерминированными сенсорами качества:
+
+```powershell
+# Запуск полного набора тестов (570 тестов)
+uv run pytest -q
+
+# Статический анализ кода (Ruff linter)
+uv run ruff check .
+
+# Проверка форматирования (Ruff formatter)
+uv run ruff format --check .
+
+# Строгая проверка типов (Mypy strict, 74 файла)
+uv run mypy core gui tests scripts main.py
+```
 
 ---
 
