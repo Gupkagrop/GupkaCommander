@@ -28,7 +28,7 @@ class TestSystemToolsDefinitions:
     """Тестирование спецификации системных инструментов."""
 
     def test_all_system_tools_present(self) -> None:
-        """Проверка наличия всех 11 системных инструментов, включая UI Automation."""
+        """Проверка наличия всех 16 системных инструментов, включая UI Automation и память."""
         expected_names = {
             "open_application",
             "open_url",
@@ -41,10 +41,15 @@ class TestSystemToolsDefinitions:
             "click_ui_element",
             "type_into_ui_element",
             "inspect_ui_elements",
+            "store_user_fact",
+            "retrieve_user_facts",
+            "add_user_note",
+            "list_user_notes",
+            "delete_user_note",
         }
         actual_names = {t["function"]["name"] for t in SYSTEM_TOOLS}
         assert actual_names == expected_names
-        assert len(SYSTEM_TOOLS) == 11
+        assert len(SYSTEM_TOOLS) == 16
 
     # Алиас для обратной совместимости
     test_all_eight_tools_present = test_all_system_tools_present

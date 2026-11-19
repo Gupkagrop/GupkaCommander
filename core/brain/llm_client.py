@@ -252,6 +252,97 @@ SYSTEM_TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "store_user_fact",
+            "description": "Сохранение структурированного факта или предпочтения в память.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "Уникальный ключ факта (например, 'редактор', 'город').",
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "Значение факта (например, 'VS Code', 'Москва').",
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Категория факта (по умолчанию 'general').",
+                    },
+                },
+                "required": ["key", "value"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "retrieve_user_facts",
+            "description": "Получение сохраненных фактов и предпочтений пользователя из памяти.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Категория фактов для фильтрации (или пустая строка).",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_user_note",
+            "description": "Создание новой текстовой заметки или напоминания пользователя.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "Содержимое заметки или задачи.",
+                    },
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_user_notes",
+            "description": "Просмотр списка заметок пользователя с возможностью поиска.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Поисковый запрос по заметкам (или пустая строка).",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_user_note",
+            "description": "Удаление заметки пользователя по числовому идентификатору.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "note_id": {
+                        "type": "integer",
+                        "description": "Числовой идентификатор удаляемой заметки.",
+                    },
+                },
+                "required": ["note_id"],
+            },
+        },
+    },
 ]
 
 
@@ -300,6 +391,9 @@ class FallbackRuleEngine:
 
         if route.intent == Intent.VISION_INTERACT:
             return self._plan_vision_fallback(route.params.get("action", ""), route.target)
+
+        if route.intent == Intent.MEMORY:
+            return self._plan_memory_fallback(route)
 
         return []
 
@@ -370,6 +464,50 @@ class FallbackRuleEngine:
             return [{"tool": "type_text", "parameters": {"text": target, "press_enter": True}}]
         return [{"tool": "inspect_screen", "parameters": {}}]
 
+    def _plan_memory_fallback(self, route: RouteResult) -> list[dict[str, Any]]:
+        """Формирование запасных действий долговременной памяти."""
+        action = str(route.params.get("action", ""))
+        if action in ("store_fact", "save_fact", "store_user_fact"):
+            return [
+                {
+                    "tool": "store_user_fact",
+                    "parameters": {
+                        "key": str(route.params.get("key", "")),
+                        "value": str(route.params.get("value", "")),
+                        "category": str(route.params.get("category", "general")),
+                    },
+                }
+            ]
+        if action in ("retrieve_facts", "list_facts", "retrieve_user_facts"):
+            return [
+                {
+                    "tool": "retrieve_user_facts",
+                    "parameters": {"category": str(route.params.get("category", ""))},
+                }
+            ]
+        if action in ("add_note", "create_note", "add_user_note"):
+            return [
+                {
+                    "tool": "add_user_note",
+                    "parameters": {"content": str(route.params.get("content", route.target))},
+                }
+            ]
+        if action in ("list_notes", "list_user_notes"):
+            return [
+                {
+                    "tool": "list_user_notes",
+                    "parameters": {"query": str(route.params.get("query", ""))},
+                }
+            ]
+        if action in ("delete_note", "delete_user_note"):
+            return [
+                {
+                    "tool": "delete_user_note",
+                    "parameters": {"note_id": int(route.params.get("note_id", 0))},
+                }
+            ]
+        return []
+
     def respond(self, prompt: str) -> str:
         """Формирование текстового ответа пользователю по правилам."""
         route = self.router.route(prompt)
@@ -412,6 +550,26 @@ class FallbackRuleEngine:
                 state_str = "включение" if route.params.get("text") == "true" else "отключение"
                 return f"Выполняю {state_str} переключателя '{elem}'{win_str}."
             return f"Выполняю действие UI Automation с элементом '{elem}'{win_str}."
+
+        if route.intent == Intent.MEMORY:
+            action = str(route.params.get("action", ""))
+            if action in ("store_fact", "save_fact", "store_user_fact"):
+                k = route.params.get("key", "")
+                v = route.params.get("value", "")
+                return f"Запомнил: {k} — это {v}."
+            if action in ("retrieve_facts", "list_facts", "retrieve_user_facts"):
+                return "Запрашиваю сохраненные факты из памяти."
+            if action in ("add_note", "create_note", "add_user_note"):
+                c = route.params.get("content", route.target)
+                return f"Заметка сохранена: {c}."
+            if action in ("list_notes", "list_user_notes"):
+                return "Читаю список ваших заметок."
+            if action in ("delete_note", "delete_user_note"):
+                nid = route.params.get("note_id", "")
+                return f"Заметка #{nid} удалена."
+            if action in ("complete_note", "close_note"):
+                nid = route.params.get("note_id", "")
+                return f"Заметка #{nid} выполнена."
 
         lower = prompt.strip().lower()
         if any(w in lower for w in ("привет", "здравствуй", "добрый день")):
@@ -596,6 +754,7 @@ class LocalLLMClient:
         self,
         prompt: str,
         image_b64: str | None = None,
+        system_prompt: str | None = None,
     ) -> list[dict[str, Any]]:
         """Генерация плана системных действий (Tool Calling) по промпту и кадру экрана.
 
@@ -614,15 +773,16 @@ class LocalLLMClient:
         else:
             user_content = prompt
 
+        sys_prompt = system_prompt or (
+            "Ты планировщик действий операционной системы. Выбирай подходящие инструменты."
+        )
+
         payload: dict[str, Any] = {
             "model": self.model_name,
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "Ты планировщик действий операционной системы. "
-                        "Выбирай подходящие инструменты."
-                    ),
+                    "content": sys_prompt,
                 },
                 {"role": "user", "content": user_content},
             ],

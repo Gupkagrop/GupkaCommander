@@ -49,6 +49,10 @@ yarn-debug.log*
 pnpm-debug.log*
 config/*_cache.json
 config/app_cache.json
+*.db
+*.db-wal
+*.db-shm
+config/memory.db*
 
 # IDE & OS Files
 .vscode/

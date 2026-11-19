@@ -33,6 +33,7 @@ class Intent(StrEnum):
     AI_COGNITIVE = "ai_cognitive"
     VISION_INTERACT = "vision_interact"
     UI_AUTOMATION = "ui_automation"
+    MEMORY = "memory"
 
 
 @dataclass(frozen=True)
@@ -149,6 +150,7 @@ class IntentRouter:
         handlers = (
             self._match_volume_control,
             self._match_window_control,
+            self._match_memory,
             self._match_run_command,
             self._match_search_web,
             self._match_ui_automation,
@@ -250,6 +252,138 @@ class IntentRouter:
                     params={"action": action},
                     matched_rule=f"window_{action}_pattern",
                 )
+        return None
+
+    def _parse_fact_key_value(self, text: str) -> tuple[str, str]:
+        """Извлечение ключа и значения факта из текста команды.
+
+        Args:
+            text: Исходная строка запроса пользователя.
+
+        Returns:
+            Кортеж (ключ, значение).
+        """
+        clean = re.sub(
+            r"^запомни(?:\s*,\s*что|:|\s+что)?\s*", "", text, flags=re.IGNORECASE
+        ).strip()
+
+        # 1. Поиск явных разделителей: «это», «—», «-», «:»
+        sep_match = re.search(r"\s+(?:это|—|-|:)\s+", clean)
+        if sep_match:
+            left = clean[: sep_match.start()].strip()
+            right = clean[sep_match.end() :].strip()
+            clean_key = re.sub(r"^(?:мой|моя|моё|мои)\s+", "", left, flags=re.IGNORECASE).strip()
+            return (clean_key or left), right
+
+        # 2. Формат «мой/моя/моё/мои <ключ> <значение>»
+        parts = clean.split(maxsplit=2)
+        if len(parts) >= 3 and parts[0].lower() in ("мой", "моя", "моё", "мои"):
+            return parts[1].strip(), parts[2].strip()
+
+        # 3. Общий факт без явного разделителя
+        return clean, clean
+
+    def _match_memory(self, raw_query: str, lower_query: str) -> RouteResult | None:
+        """Распознавание команд работы с долговременной памятью и заметками.
+
+        Args:
+            raw_query: Неизмененный текст запроса.
+            lower_query: Текст запроса в нижнем регистре.
+
+        Returns:
+            RouteResult с намерением MEMORY или None.
+        """
+        # 1. Завершение/закрытие заметки: «выполни заметку <id>», «закрой заметку <id>»
+        complete_match = re.match(
+            r"^(?:выполни|выполнить|закрой|закрыть|отметь)\s+заметку(?:\s+номер|\s+№)?\s+(\d+)$",
+            lower_query,
+        )
+        if complete_match:
+            note_id = int(complete_match.group(1))
+            return RouteResult(
+                intent=Intent.MEMORY,
+                query=raw_query,
+                target=str(note_id),
+                params={"action": "complete_note", "note_id": note_id},
+                matched_rule="memory_complete_note",
+            )
+
+        # 2. Удаление заметки: «удали заметку <id>»
+        delete_match = re.match(
+            r"^(?:удали|удалить)\s+заметку(?:\s+номер|\s+№)?\s+(\d+)$",
+            lower_query,
+        )
+        if delete_match:
+            note_id = int(delete_match.group(1))
+            return RouteResult(
+                intent=Intent.MEMORY,
+                query=raw_query,
+                target=str(note_id),
+                params={"action": "delete_note", "note_id": note_id},
+                matched_rule="memory_delete_note",
+            )
+
+        # 3. Просмотр заметок: «покажи мои заметки», «прочитай заметки», «список заметок»
+        list_notes_pat = (
+            r"^(?:покажи(?:\s+мои)?\s+заметки|прочитай(?:\s+мои)?\s+заметки|"
+            r"список\s+заметок|мои\s+заметки|все\s+заметки)$"
+        )
+        if re.search(list_notes_pat, lower_query):
+            return RouteResult(
+                intent=Intent.MEMORY,
+                query=raw_query,
+                target="list_notes",
+                params={"action": "list_notes"},
+                matched_rule="memory_list_notes",
+            )
+
+        # 4. Создание заметки: «запиши заметку <текст>», «добавь в заметки <текст>»,
+        #    «создай заметку <текст>»
+        add_note_match = re.match(
+            r"^(?:запиши\s+заметку|добавь\s+в\s+заметки|создай\s+заметку|добавь\s+заметку|новая\s+заметка)"
+            r"\s*[:,\s]\s*(.+)$",
+            raw_query,
+            re.IGNORECASE,
+        )
+        if add_note_match:
+            content = add_note_match.group(1).strip()
+            return RouteResult(
+                intent=Intent.MEMORY,
+                query=raw_query,
+                target=content,
+                params={"action": "add_note", "content": content},
+                matched_rule="memory_add_note",
+            )
+
+        # 5. Запрос фактов: «что ты обо мне помнишь?», «мои предпочтения», «какие факты ты знаешь?»
+        facts_query_pat = (
+            r"^(?:что\s+ты\s+обо\s+мне\s+помнишь\??|мои\s+предпочтения|"
+            r"какие\s+факты\s+ты\s+знаешь\??|что\s+ты\s+знаешь\s+обо\s+мне\??|"
+            r"мои\s+факты|список\s+фактов)$"
+        )
+        if re.search(facts_query_pat, lower_query):
+            return RouteResult(
+                intent=Intent.MEMORY,
+                query=raw_query,
+                target="retrieve_facts",
+                params={"action": "retrieve_facts"},
+                matched_rule="memory_retrieve_facts",
+            )
+
+        # 6. Сохранение факта:
+        # «запомни, что <факт>» / «запомни: <ключ> это <значение>» / «мой <ключ> это <значение>»
+        is_remember = re.match(r"^запомни(?:\s*,\s*что|:|\s+что|\s)", lower_query)
+        is_my_fact = re.match(r"^(?:мой|моя|моё|мои)\s+.+?\s+(?:это|—|-|:)\s+.+$", lower_query)
+        if is_remember or is_my_fact:
+            key, val = self._parse_fact_key_value(raw_query)
+            return RouteResult(
+                intent=Intent.MEMORY,
+                query=raw_query,
+                target=f"{key}: {val}",
+                params={"action": "store_fact", "key": key, "value": val},
+                matched_rule="memory_store_fact",
+            )
+
         return None
 
     def _match_run_command(self, raw_query: str, lower_query: str) -> RouteResult | None:

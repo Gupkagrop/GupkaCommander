@@ -25,6 +25,7 @@ from PySide6.QtWidgets import QApplication
 from core.app_finder import AppFinder
 from core.brain.llm_client import LocalLLMClient
 from core.failsafe import FailSafeMonitor, get_failsafe_monitor
+from core.memory import MemoryManager
 from core.os_controller import DangerousCommandError, OSController
 from core.routing.intent_router import Intent, IntentRouter, RouteResult
 from core.uia import UIAutomationManager
@@ -81,6 +82,7 @@ class GupkaCommanderApp(QObject):
         vision_agent: VisionAgent | None = None,
         uia_manager: UIAutomationManager | None = None,
         failsafe_monitor: FailSafeMonitor | None = None,
+        memory_manager: MemoryManager | None = None,
         enable_voice: bool = True,
         enable_hotkey: bool = True,
         enable_tray: bool = True,
@@ -101,6 +103,7 @@ class GupkaCommanderApp(QObject):
             vision_agent: Агент визуального взаимодействия с экраном.
             uia_manager: Менеджер Microsoft UI Automation.
             failsafe_monitor: Монитор безопасности FailSafe для прерывания операций по Esc.
+            memory_manager: Менеджер долговременной памяти SQLite.
             enable_voice: Флаг активации голосового конвейера.
             enable_hotkey: Флаг активации глобального хоткея Alt+Space.
             enable_tray: Флаг отображения системного трея.
@@ -122,6 +125,7 @@ class GupkaCommanderApp(QObject):
         self.vision_agent = vision_agent or VisionAgent()
         self.uia_manager = uia_manager or UIAutomationManager()
         self.failsafe_monitor = failsafe_monitor or get_failsafe_monitor()
+        self.memory_manager = memory_manager or MemoryManager(db_path="config/memory.db")
         self._current_response_streamed: bool = False
         self._audio_streamed: bool = False
         self.voice_bridge = VoiceBridge()
@@ -216,9 +220,19 @@ class GupkaCommanderApp(QObject):
         self._current_response_streamed = False
         self._audio_streamed = False
 
+        # Определение намерения для логирования и маршрутизации
+        route = self.intent_router.route(clean_text)
+        intent_name = str(route.intent.value if hasattr(route.intent, "value") else route.intent)
+
+        # Логируем шаг пользователя в базу долговременной памяти
+        try:
+            self.memory_manager.log_turn(role="user", text=clean_text, intent=intent_name)
+        except Exception as exc:
+            logger.warning("Ошибка логирования хода пользователя в память: %s", exc)
+
         try:
             # Выполняем команду через маршрутизатор и исполнители
-            response_text = self._dispatch_command(clean_text)
+            response_text = self._dispatch_command(clean_text, route=route)
         except InterruptedError:
             logger.warning("Исполнение команды прервано пользователем (FailSafe).")
             response_text = "Операция экстренно прервана пользователем (FailSafe)."
@@ -237,6 +251,12 @@ class GupkaCommanderApp(QObject):
             response_text = f"Произошла ошибка при выполнении: {exc}"
             self._current_response_streamed = False
 
+        # Логируем ответ ассистента в базу долговременной памяти
+        try:
+            self.memory_manager.log_turn(role="assistant", text=response_text, intent=intent_name)
+        except Exception as exc:
+            logger.warning("Ошибка логирования ответа ассистента в память: %s", exc)
+
         # Добавляем ответ ассистента в историю, если он не был добавлен потоком
         if not self._current_response_streamed:
             self.spotlight_bar.add_chat_message("assistant", response_text, status="done")
@@ -253,43 +273,114 @@ class GupkaCommanderApp(QObject):
 
         return response_text
 
-    def _dispatch_command(self, text: str) -> str:
+    def _dispatch_command(self, text: str, route: RouteResult | None = None) -> str:
         """
         Маршрутизация текстовой команды по специализированным обработчикам.
 
         Args:
             text: Исходный текст команды.
+            route: Опционально предварительно вычисленный результат маршрутизации.
 
         Returns:
             str: Результат выполнения для пользователя.
         """
-        route = self.intent_router.route(text)
+        active_route = route or self.intent_router.route(text)
 
-        if route.intent == Intent.VOLUME_CONTROL:
-            return self._handle_volume_control(route)
+        if active_route.intent == Intent.VOLUME_CONTROL:
+            return self._handle_volume_control(active_route)
 
-        if route.intent == Intent.WINDOW_CONTROL:
-            return self._handle_window_control(route)
+        if active_route.intent == Intent.WINDOW_CONTROL:
+            return self._handle_window_control(active_route)
 
-        if route.intent == Intent.OPEN_URL:
-            return self._handle_open_url(route, text)
+        if active_route.intent == Intent.MEMORY:
+            return self._handle_memory_intent(active_route)
 
-        if route.intent == Intent.SEARCH_WEB:
-            return self._handle_search_web(route)
+        if active_route.intent == Intent.OPEN_URL:
+            return self._handle_open_url(active_route, text)
 
-        if route.intent == Intent.RUN_COMMAND:
-            return self._handle_run_command(route, text)
+        if active_route.intent == Intent.SEARCH_WEB:
+            return self._handle_search_web(active_route)
 
-        if route.intent == Intent.OPEN_APP:
-            return self._handle_open_app(route)
+        if active_route.intent == Intent.RUN_COMMAND:
+            return self._handle_run_command(active_route, text)
 
-        if route.intent == Intent.VISION_INTERACT:
-            return self._handle_vision_interact(route, text)
+        if active_route.intent == Intent.OPEN_APP:
+            return self._handle_open_app(active_route)
 
-        if route.intent == Intent.UI_AUTOMATION:
-            return self._handle_ui_automation(route, text)
+        if active_route.intent == Intent.VISION_INTERACT:
+            return self._handle_vision_interact(active_route, text)
+
+        if active_route.intent == Intent.UI_AUTOMATION:
+            return self._handle_ui_automation(active_route, text)
 
         return self._handle_ai_cognitive(text)
+
+    def _handle_memory_intent(self, params: dict[str, Any] | RouteResult) -> str:
+        """
+        Диспетчер команд долговременной памяти для быстрого исполнения (< 15 мс).
+
+        Args:
+            params: Параметры намерения (словарь параметров или экземпляр RouteResult).
+
+        Returns:
+            str: Результат операции для вывода пользователю и голосового ответа.
+        """
+        p = params.params if isinstance(params, RouteResult) else params
+        action = str(p.get("action", ""))
+
+        if action in ("store_fact", "save_fact", "store_user_fact"):
+            key = str(p.get("key", "")).strip()
+            val = str(p.get("value", "")).strip()
+            cat = str(p.get("category", "general")).strip()
+            if not key or not val:
+                return "Не удалось определить ключ или значение факта."
+            self.memory_manager.set_fact(key, val, category=cat)
+            return f"Запомнил: {key} — это {val}."
+
+        if action in ("retrieve_facts", "list_facts", "retrieve_user_facts"):
+            cat_filter = str(p.get("category", "")).strip() or None
+            facts = self.memory_manager.list_facts(category=cat_filter)
+            if not facts:
+                return "Я пока ничего о вас не помню."
+            items = [f"{k}: {v}" for k, v in facts.items()]
+            return "Вот что я о вас помню: " + "; ".join(items) + "."
+
+        if action in ("add_note", "create_note", "add_user_note"):
+            content = str(p.get("content", "")).strip()
+            if not content:
+                return "Текст заметки не может быть пустым."
+            note_id = self.memory_manager.add_note(content)
+            return f"Заметка #{note_id} сохранена: {content}."
+
+        if action in ("list_notes", "list_user_notes"):
+            query_str = str(p.get("query", "")).strip() or None
+            notes = self.memory_manager.list_notes(only_active=True, query=query_str)
+            if not notes:
+                return "У вас нет активных заметок."
+            preview = [f"#{n['id']} {n['content']}" for n in notes[:5]]
+            total = len(notes)
+            count_str = f" ({total})" if total > 1 else ""
+            return f"Ваши заметки{count_str}: " + "; ".join(preview) + "."
+
+        if action in ("complete_note", "complete_user_note", "close_note"):
+            note_id = int(p.get("note_id", 0))
+            if note_id <= 0:
+                return "Не указан номер заметки."
+            ok = self.memory_manager.complete_note(note_id)
+            return (
+                f"Заметка #{note_id} отмечена как выполненная."
+                if ok
+                else f"Заметка #{note_id} не найдена."
+            )
+
+        if action in ("delete_note", "delete_user_note"):
+            note_id = int(p.get("note_id", 0))
+            if note_id <= 0:
+                return "Не указан номер заметки."
+            ok = self.memory_manager.delete_note(note_id)
+            return f"Заметка #{note_id} удалена." if ok else f"Заметка #{note_id} не найдена."
+
+        return "Команда памяти не распознана."
 
     def _handle_volume_control(self, route: RouteResult) -> str:
         """Обработка команд управления системной громкостью."""
@@ -535,9 +626,19 @@ class GupkaCommanderApp(QObject):
             synthesizer.speak_stream(_queue_iter())
             self._audio_streamed = True
 
+        memory_ctx = self.memory_manager.format_system_prompt_context()
+        if memory_ctx:
+            base_sys = (
+                "Ты автономный оператор Windows 11 GupkaCommander. Отвечай кратко на русском языке."
+            )
+            sys_prompt = f"{base_sys}\n\n{memory_ctx}"
+            stream_gen = self.llm_client.generate_response_stream(text, system_prompt=sys_prompt)
+        else:
+            stream_gen = self.llm_client.generate_response_stream(text)
+
         tokens: list[str] = []
         try:
-            for chunk in self.llm_client.generate_response_stream(text):
+            for chunk in stream_gen:
                 if self.failsafe_monitor.is_interrupted():
                     if synthesizer is not None and hasattr(synthesizer, "stop"):
                         synthesizer.stop()
@@ -574,7 +675,15 @@ class GupkaCommanderApp(QObject):
     def _handle_ai_cognitive(self, text: str) -> str:
         """Обработка свободного запроса через локальную модель LLM (планирование/ответ)."""
         if self.llm_client.is_healthy():
-            actions = self.llm_client.plan_actions(text)
+            memory_ctx = self.memory_manager.format_system_prompt_context()
+            if memory_ctx:
+                base_planner = (
+                    "Ты планировщик действий операционной системы. Выбирай подходящие инструменты."
+                )
+                planner_sys = f"{base_planner}\n\n{memory_ctx}"
+                actions = self.llm_client.plan_actions(text, system_prompt=planner_sys)
+            else:
+                actions = self.llm_client.plan_actions(text)
             if actions:
                 return self._execute_planned_actions(actions)
             return self._stream_cognitive_response(text)
@@ -686,6 +795,41 @@ class GupkaCommanderApp(QObject):
             target = f"в окне '{win_title}'" if win_title else "в активном окне"
             return f"Найдено {count} элементов UI Automation {target}."
 
+        if tool == "store_user_fact":
+            key = str(params.get("key", "")).strip()
+            val = str(params.get("value", "")).strip()
+            cat = str(params.get("category", "general")).strip()
+            if not key or not val:
+                return "Ошибка: пустой ключ или значение факта."
+            self.memory_manager.set_fact(key, val, category=cat)
+            return f"Факт '{key}' сохранен в память."
+
+        if tool == "retrieve_user_facts":
+            cat_query: str | None = str(params.get("category", "")).strip() or None
+            facts = self.memory_manager.list_facts(category=cat_query)
+            if not facts:
+                return "Факты не найдены."
+            return "Сохраненные факты: " + ", ".join(f"{k}: {v}" for k, v in facts.items()) + "."
+
+        if tool == "add_user_note":
+            content = str(params.get("content", "")).strip()
+            if not content:
+                return "Ошибка: пустой текст заметки."
+            nid = self.memory_manager.add_note(content)
+            return f"Заметка #{nid} добавлена."
+
+        if tool == "list_user_notes":
+            notes_query: str | None = str(params.get("query", "")).strip() or None
+            notes = self.memory_manager.list_notes(only_active=True, query=notes_query)
+            if not notes:
+                return "Заметки не найдены."
+            return "Заметки: " + "; ".join(f"#{n['id']} {n['content']}" for n in notes) + "."
+
+        if tool == "delete_user_note":
+            nid = int(params.get("note_id", 0))
+            ok = self.memory_manager.delete_note(nid)
+            return f"Заметка #{nid} удалена." if ok else f"Заметка #{nid} не найдена."
+
         return f"Инструмент '{tool}' не поддерживается."
 
     def _execute_window_action(self, action: str, target: str) -> str:
@@ -795,6 +939,11 @@ class GupkaCommanderApp(QObject):
             self.tray_manager.hide()
         except Exception as exc:
             logger.debug("Ошибка при скрытии интерфейса: %s", exc)
+
+        try:
+            self.memory_manager.close()
+        except Exception as exc:
+            logger.debug("Ошибка при закрытии базы данных памяти: %s", exc)
 
         logger.info("GupkaCommander остановлен.")
 
