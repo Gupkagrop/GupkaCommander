@@ -203,11 +203,21 @@ class AppFinder:
 
     def __init__(
         self,
-        cache_path: Path | str = Path("config/app_cache.json"),
-        commands_path: Path | str = Path("config/commands.json"),
+        cache_path: Path | str | None = None,
+        commands_path: Path | str | None = None,
     ) -> None:
-        self.cache_path = Path(cache_path)
-        self.commands_path = Path(commands_path)
+        from core.paths import get_cache_path, get_config_path
+
+        if cache_path is not None and str(cache_path) != "config/app_cache.json":
+            self.cache_path = Path(cache_path)
+        else:
+            self.cache_path = get_cache_path("app_cache.json")
+
+        if commands_path is not None and str(commands_path) != "config/commands.json":
+            self.commands_path = Path(commands_path)
+        else:
+            self.commands_path = get_config_path("commands.json")
+
         self._apps: list[AppInfo] = []
         self._aliases: dict[str, str] = {}
         self.load_aliases()

@@ -35,11 +35,12 @@ class WebLauncher:
     """Компонент для запуска веб-страниц, поиска и разрешения веб-алиасов."""
 
     def __init__(self, config_path: Path | str | None = None) -> None:
-        self.config_path: Path = (
-            Path(config_path)
-            if config_path is not None
-            else Path(__file__).resolve().parent.parent / "config" / "commands.json"
-        )
+        if config_path is not None:
+            self.config_path = Path(config_path)
+        else:
+            from core.paths import get_config_path
+
+            self.config_path = get_config_path("commands.json")
         self.web_aliases: dict[str, str] = {}
         self.search_engines: dict[str, str] = {}
         self.load_config()

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.paths import get_icon_path
 from gui.chat_drawer import ChatDrawer
 from gui.styles import FLUENT_DARK_THEME, PALETTE, get_status_badge_qss
 from gui.waveform_widget import WaveformWidget
@@ -59,9 +60,7 @@ class SpotlightBar(QWidget):
     visibility_changed = Signal(bool)
 
     DEFAULT_WIDTH: int = 680
-    DEFAULT_ICON_PATH: Path = (
-        Path(__file__).resolve().parent.parent / "assets" / "gupka_commander.ico"
-    )
+    DEFAULT_ICON_PATH: Path = get_icon_path()
 
     def __init__(
         self,
@@ -96,6 +95,8 @@ class SpotlightBar(QWidget):
         self.setFixedWidth(self.DEFAULT_WIDTH)
         if self._icon_path.exists():
             self.setWindowIcon(QIcon(str(self._icon_path)))
+        else:
+            self.setWindowIcon(QIcon())
 
     def _init_ui(self) -> None:
         """Построение элементов интерфейса окна."""

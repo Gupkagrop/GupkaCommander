@@ -103,7 +103,12 @@ def init_database(db_path: str | Path = "config/memory.db") -> sqlite3.Connectio
     is_memory: bool = str(db_path) == ":memory:"
 
     if not is_memory:
-        resolved_path: Path = Path(db_path).resolve()
+        if str(db_path) == "config/memory.db":
+            from core.paths import get_database_path
+
+            resolved_path = get_database_path("memory.db")
+        else:
+            resolved_path = Path(db_path).resolve()
         resolved_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(resolved_path), check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL;")

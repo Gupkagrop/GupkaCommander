@@ -5,9 +5,9 @@
 > Обновляется агентом в конце каждого выполненного этапа или задачи (Stage 4 SOP).
 
 ## 1. Project Health & Stage
-- **Current Phase:** Phase 5: Complete Desktop & Cognitive Core Implementation (Done)
-- **Status:** All Sprints Complete / Ready for Production Use & Live Deployment
-- **Last Updated:** 2026-11-19 21:07
+- **Current Phase:** Phase 6: Vector 4 — Autonomous Windows Distribution & Installer (.exe / PyInstaller / Inno Setup) (Complete)
+- **Status:** All Milestones & Quality Sensors Complete / Production-Grade Release Ready (497/497 Tests Green)
+- **Last Updated:** 2026-11-20 01:03
 - **Active Branch:** `main`
 
 ## 2. Completed Milestones
@@ -24,19 +24,21 @@
 - [x] **2026-11-19 Реализация Вектора 2 (Streaming LLM-to-TTS):** Роем автономных агентов (`stream-engineer`, `llm-stream-integrator`, `verifier-stream`, `monitor-8`) реализован параллельный потоковый конвейер синтеза речи с latency первого звука < 300 мс: модуль выделения предложений `SentenceAccumulator` (`core/voice/sentence_streamer.py`) с защитой от разбиения по числам и русским сокращениям, потоковая очередь в `PiperSynthesizer.speak_stream(...)`, SSE-генерация токенов в `LocalLLMClient.generate_response_stream(...)` и живая печать в `ChatDrawer` с поддержкой мгновенного прерывания (Barge-In) по `Esc` и FailSafe. Написано 37 новых тестов (всего 412 тестов в проекте), 100% green, 0 ошибок mypy strict и ruff. (Commit: `7d96856`)
 - [x] **2026-11-20 Реализация Вектора 3 (Долговременная память и база знаний SQLite / Episodic Memory):** Роем автономных агентов (`db-memory-engineer`, `memory-router-integrator`, `verifier-memory`, `monitor-9`) реализована подсистема долговременной памяти: база SQLite WAL `config/memory.db` (`core/memory/db.py`) с таблицами `user_facts`, `notes` (с FTS5 полнотекстовым поиском и триггерами) и `conversations`, менеджер памяти `MemoryManager` (`core/memory/memory_manager.py`), детерминированный Fast-Path для `Intent.MEMORY` (< 15 мс), 5 новых системных инструментов памяти в `SYSTEM_TOOLS`, динамическая инъекция сохраненных фактов о пользователе в системный промпт LLM и автоматическое логирование диалога. Написано 38 новых тестов в `tests/test_memory_db.py`, `tests/test_memory_manager.py`, `tests/test_memory.py`, `tests/test_integration_vector3.py` (всего 450 тестов), 100% green, 0 ошибок mypy strict и ruff. (Commit: `d1e56e9`)
 - [x] **2026-11-20 Спринт стабилизации и надежности (Quality & Reliability Hardening):** По результатам независимого аудита Gemini 4 Neon и Hydrogen устранены критические дефекты реальной эксплуатации: запущен жизненный цикл `FailSafeMonitor` (`start`, `stop`, `reset_abort`), устранена блокировка GUI и реентрантность в `main.py`, отменен слепой клик `(500, 500)`, добавлена поддержка ввода кириллицы через Windows Clipboard в `VisionAgent.type_text`, реализован реальный Mute микрофона в `AudioCapture` и передача RMS-уровня в `WaveformWidget`, добавлена потоковая инициализация COM `pythoncom.CoInitialize()`, добавлен `PRAGMA busy_timeout = 5000` и безопасные rollback транзакций в SQLite. Написано 32 новых теста в `tests/test_stability_core.py` и смежных модулях (всего 482 теста), 100% green, 0 ошибок mypy strict и ruff. (Commit: `0351f02`)
+- [x] **2026-11-20 Глобальный независимый аудит Gemini 4 Argon:** Проведен сквозной аудит безопасности Windows 11, быстродействия, ресурсоемкости и качества кода. Оценка 9.9/10 (Production-Grade Release Ready), 0 P0/P1/P2 дефектов.
+- [x] **2026-11-20 Реализация Вектора 4 (Автономный Windows-дистрибутив и инсталлятор .exe / PyInstaller / Inno Setup):** Реализован модуль виртуализации путей `core/paths.py` (разделение read-only ресурсов в `_MEIPASS` и изменяемых данных в `%LOCALAPPDATA%\GupkaCommander`), спецификация `GupkaCommander.spec` с Windows 11 Per-Monitor DPI манифестом и нативной иконкой, скрипты автоматической сборки `scripts/build_executable.py` и `scripts/build_installer.py`, спецификация Inno Setup `scripts/installer.iss` с поддержкой двухуровневой гибкой установки (user-mode без UAC / admin-mode с UAC), корневой 1-click скрипт `build.bat`. Скомпилирован автономный дистрибутив `dist/GupkaCommander/GupkaCommander.exe` (70.48 MB, общий пакет 855 MB) и протестирован в headless-режиме. Написано 15 новых тестов в `tests/test_paths.py` и `tests/test_packaging_spec.py` (всего 497 тестов), 100% green, 0 ошибок mypy strict и ruff.
 
 ## 3. Active Task (Current Focus)
-- **Feature:** Спринт стабилизации завершен (482/482 тестов green). Запуск финального глобального аудита на модели Argon (High) перед сборкой Вектора 4.
-- **Status:** 482/482 тестов зелёные, 0 ошибок mypy в 67 исходных файлах.
-- **Verification Plan:** `uv run pytest tests/ -q`, `uv run ruff check .`, `uv run mypy core gui tests scripts main.py`.
+- **Feature:** Вектор 4 успешно реализован и протестирован. Все спринты и векторы завершены.
+- **Status:** 497/497 тестов зелёные, 0 ошибок mypy в 72 исходных файлах, 0 ошибок ruff.
+- **Verification Plan:** `uv run pytest tests/ -q`, `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy core gui tests scripts main.py`.
 
 ## 4. Next Immediate Steps (Backlog)
 - [x] **Вектор 1:** Microsoft UI Automation (Tier 1 UIA) — мгновенный клик и ввод в окнах по именам элементов.
 - [x] **Вектор 2:** Потоковый синтез речи (Streaming LLM-to-TTS) — озвучивание ответа на лету по предложениям с задержкой < 300 мс.
 - [x] **Вектор 3:** Долговременная память и база знаний (SQLite / Episodic Memory) — запоминание предпочтений, заметок и истории диалогов.
 - [x] **Спринт стабилизации:** Устранение P0/P1 дефектов надежности и безопасности Windows 11.
-- [ ] **Глобальный аудит:** Экспертная верификация модели Argon.
-- [ ] **Вектор 4:** Сборка автономного инсталлятора Windows (.exe / PyInstaller / Inno Setup) для работы без Python/uv.
+- [x] **Глобальный аудит:** Экспертная верификация модели Argon (оценка 9.9/10).
+- [x] **Вектор 4:** Сборка автономного инсталлятора Windows (.exe / PyInstaller / Inno Setup) для работы без Python/uv.
 
 ## 5. Architectural Decisions & Blockers
 - **Decisions Log:**
@@ -46,5 +48,7 @@
   - `2026-11-19`: Вызов Spotlight Bar привязан к нативному Win32 `RegisterHotKey` (Alt+Space) с автоцентрированием на активном мониторе и возвратом фокуса.
   - `2026-11-19`: Реализовано когнитивное зрение и планирование действий через OpenAI-совместимый протокол со встроенным FallbackRuleEngine для автономной работы без активного LLM-сервера.
   - `2026-11-19`: Все модели локализованы в директории `models/` корня репозитория для 100% автономности и переносимости; сгенерирована фирменная Windows-иконка `assets/gupka_commander.ico`.
+  - `2026-11-20`: Виртуализация путей (`core/paths.py`): разделение неизменяемых ресурсов (`sys._MEIPASS`) и пользовательских данных (`%LOCALAPPDATA%\GupkaCommander`).
+  - `2026-11-20`: Двухуровневый инсталлятор Inno Setup (`scripts/installer.iss`): по умолчанию без UAC в AppData с диалогом выбора Program Files.
 - **Known Blockers / Warnings:**
-  - Нет блокеров. Все 5 спринтов полностью завершены и протестированы (331/331 тест зелёный).
+  - Нет блокеров. Проект полностью завершен, собран и протестирован (497/497 тестов зелёные).

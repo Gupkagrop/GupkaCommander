@@ -21,6 +21,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from core.app_finder import AppFinder
@@ -28,6 +29,7 @@ from core.brain.llm_client import LocalLLMClient
 from core.failsafe import FailSafeMonitor, get_failsafe_monitor
 from core.memory import MemoryManager
 from core.os_controller import DangerousCommandError, OSController
+from core.paths import get_database_path, get_icon_path
 from core.routing.intent_router import Intent, IntentRouter, RouteResult
 from core.uia import UIAutomationManager
 from core.vision.vision_agent import ActionFailedError, VisionAgent
@@ -126,7 +128,9 @@ class GupkaCommanderApp(QObject):
         self.vision_agent = vision_agent or VisionAgent()
         self.uia_manager = uia_manager or UIAutomationManager()
         self.failsafe_monitor = failsafe_monitor or get_failsafe_monitor()
-        self.memory_manager = memory_manager or MemoryManager(db_path="config/memory.db")
+        self.memory_manager = memory_manager or MemoryManager(
+            db_path=get_database_path("memory.db")
+        )
         self._current_response_streamed: bool = False
         self._audio_streamed: bool = False
         self._is_shutting_down: bool = False
@@ -1052,6 +1056,10 @@ def main() -> int:
     app = QApplication.instance()
     if not isinstance(app, QApplication):
         app = QApplication(sys.argv)
+
+    icon_path = get_icon_path()
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     commander = GupkaCommanderApp(
         app=app,

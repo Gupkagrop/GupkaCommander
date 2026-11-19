@@ -14,6 +14,7 @@ from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QAction, QBrush, QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from core.paths import get_icon_path
 from gui.styles import PALETTE
 
 logger = logging.getLogger(__name__)
@@ -45,9 +46,7 @@ class TrayManager(QObject):
     settings_triggered = Signal()
     quit_requested = Signal()
 
-    DEFAULT_ICON_PATH: Path = (
-        Path(__file__).resolve().parent.parent / "assets" / "gupka_commander.ico"
-    )
+    DEFAULT_ICON_PATH: Path = get_icon_path()
 
     def __init__(
         self,

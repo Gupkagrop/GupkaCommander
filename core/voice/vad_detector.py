@@ -69,6 +69,7 @@ class VADDetector:
         self._speech_end: bool = False
         self._silence_ms: float = 0.0
         self._last_probability: float = 0.0
+        self._custom_model_specified: bool = model_path is not None
 
         self._init_session()
 
@@ -99,9 +100,10 @@ class VADDetector:
         Попытка загрузки модели Silero VAD через torch.hub при наличии torch.
         """
         try:
-            import torch  # type: ignore[import-not-found]
+            import torch
 
-            model, _ = torch.hub.load(
+            torch_load = getattr(torch.hub, "load")
+            model, _ = torch_load(
                 repo_or_dir="snakers4/silero-vad",
                 model="silero_vad",
                 onnx=True,
@@ -139,8 +141,8 @@ class VADDetector:
             except Exception as exc:
                 logger.warning("Ошибка загрузки Silero VAD ONNX: %s. Проверка fallback.", exc)
 
-        # Fallback 1: попытка загрузки через torch.hub
-        if self._try_init_torch_hub():
+        # Fallback 1: попытка загрузки через torch.hub (если нет явного кастомного пути)
+        if not self._custom_model_specified and self._try_init_torch_hub():
             return
 
         # Fallback 2: энергетический анализ (RMS)
