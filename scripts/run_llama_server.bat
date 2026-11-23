@@ -21,10 +21,18 @@ echo ====================================================================
 echo   GupkaCommander -- Запуск локального VLM сервера llama.cpp
 echo ====================================================================
 
+if not exist "%MODEL_PATH%" if exist "%LOCALAPPDATA%\GupkaCommander\models\llm\qwen2.5-vl-3b-instruct-q4_k_m.gguf" (
+    set "MODEL_PATH=%LOCALAPPDATA%\GupkaCommander\models\llm\qwen2.5-vl-3b-instruct-q4_k_m.gguf"
+)
+if not exist "%MMPROJ_PATH%" if exist "%LOCALAPPDATA%\GupkaCommander\models\llm\qwen2.5-vl-3b-mmproj-f16.gguf" (
+    set "MMPROJ_PATH=%LOCALAPPDATA%\GupkaCommander\models\llm\qwen2.5-vl-3b-mmproj-f16.gguf"
+)
+
 rem 1. Поиск исполняемого файла llama-server.exe
 set "LLAMA_BIN="
 
 if defined LLAMA_SERVER_PATH if exist "%LLAMA_SERVER_PATH%" set "LLAMA_BIN=%LLAMA_SERVER_PATH%"
+if not defined LLAMA_BIN if exist "%LOCALAPPDATA%\GupkaCommander\bin\llama-server.exe" set "LLAMA_BIN=%LOCALAPPDATA%\GupkaCommander\bin\llama-server.exe"
 if not defined LLAMA_BIN if exist "llama-server.exe" set "LLAMA_BIN=llama-server.exe"
 if not defined LLAMA_BIN if exist "tools\llama-server.exe" set "LLAMA_BIN=tools\llama-server.exe"
 if not defined LLAMA_BIN if exist "bin\llama-server.exe" set "LLAMA_BIN=bin\llama-server.exe"

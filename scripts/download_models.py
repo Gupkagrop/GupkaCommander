@@ -33,14 +33,15 @@ PIPER_CONFIG_URL = (
     "dmitri/medium/ru_RU-dmitri-medium.onnx.json"
 )
 VLM_MODEL_URL = (
-    "https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/"
-    "qwen2.5-vl-3b-instruct-q4_k_m.gguf"
+    "https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/"
+    "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"
 )
 VLM_MMPROJ_URL = (
-    "https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/mmproj-model-f16.gguf"
+    "https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/"
+    "mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf"
 )
 WHISPER_REPO_BASE = "https://huggingface.co/Systran/faster-whisper-base/resolve/main"
-WHISPER_FILES = ["model.bin", "config.json", "vocabulary.json", "tokenizer.json"]
+WHISPER_FILES = ["model.bin", "config.json", "vocabulary.txt", "tokenizer.json"]
 
 
 def _should_skip_download(dest_path: Path, force: bool, description: str) -> bool:

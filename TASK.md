@@ -5,9 +5,9 @@
 > Обновляется агентом в конце каждого выполненного этапа или задачи (Stage 4 SOP).
 
 ## 1. Project Health & Stage
-- **Current Phase:** Phase 7: Polish & Hardening Sprint (Complete) — Final Multi-Model Audit Ready
-- **Status:** All Milestones, Hardening & Quality Sensors Complete / Production-Grade Release (560/560 Tests Green, 0 Ruff, 0 Mypy Strict)
-- **Last Updated:** 2026-11-20 01:50
+- **Current Phase:** Phase 8: Автозагрузка зависимостей при запуске `.exe` + Многопараметрический аудит Gemini 4 Argon (Complete)
+- **Status:** Production-Grade Release Ready (581/581 Tests Green, 0 Ruff, 0 Mypy Strict in 77 files, Argon Score: 9.5/10)
+- **Last Updated:** 2026-11-23 19:56
 - **Active Branch:** `main`
 
 ## 2. Completed Milestones
@@ -34,11 +34,12 @@
   4. Блокировка рекурсивного удаления системных папок и переменных окружения (`$env:SystemRoot`, `~`).
   5. Подавление мигания консоли при вызове команд через `subprocess.CREATE_NO_WINDOW`.
   6. Строгие 64-битные типы `user32.SetClipboardData.argtypes` и `restype` с освобождением `GlobalFree` при ошибке.
-  Написано 10 новых тестов на векторы обхода (всего 570 тестов в проекте), 100% green, 0 ошибок mypy strict и ruff.
+  Написано 10 новых тестов на векторы обхода (всего 570 тестов в проекте), 100% green, 0 ошибок mypy strict и ruff. (Commit: `ea09c27`)
+- [x] **2026-11-23 Подсистема автозагрузки зависимостей при запуске `.exe` и аудит Gemini 4 Argon (9.5/10):** Реализованы ядро диагностики и потоковой загрузки `core/bootstrap.py` (`DependencyManager`, HTTP Range докачка, резервное зеркало, защита от Zip Slip, автовыбор `llama.cpp` Vulkan/CPU, проверка `min_bytes` до `os.replace`, `get_bin_dir()` в `core/paths.py`) и Fluent Dark окно запроса разрешения `gui/setup_dialog.py` (`DependencySetupDialog`, неблокирующий `QThread`, контроль места на диске, сохранение `skip_prompt`). Обновлены проверенные живые URL моделей (`ggml-org/Qwen2.5-VL-3B-Instruct-GGUF`, `vocabulary.txt`), добавлен офлайн-подхват скачанной папки `models/whisper` в `FasterWhisperTranscriber`, CLI-флаги `--setup`/`--skip-setup` в `main.py`, пункт трея «Модели и зависимости...» в `gui/tray_icon.py`. Проведен многопараметрический аудит на модели Gemini 4 Argon (итоговый балл **9.5 / 10**, 10/10 качество кода), оперативно закрыты замечания по валидации `min_bytes` и приоритету `data_models` в frozen-режиме. Пересобран `dist/GupkaCommander/GupkaCommander.exe` (70.51 MB, пакет 898.47 MB, headless exit code `0`). Написано 11 новых тестов в `tests/test_bootstrap.py` (всего 581 тест), 100% green, 0 ошибок ruff и mypy strict.
 
 ## 3. Active Task (Current Focus)
-- **Feature:** Проект полностью отполирован, защищен и верифицирован двумя независимыми передовыми моделями.
-- **Status:** 570/570 тестов зелёные (100%), 0 ошибок mypy в 74 файлах, 0 ошибок ruff в 82 файлах, автономный бинарник `dist/GupkaCommander` (898 MB) протестирован и готов к релизу.
+- **Feature:** Автозагрузка зависимостей при запуске `.exe` реализована, проверена и собрана в дистрибутив; аудит Gemini 4 Argon завершен (9.5 / 10).
+- **Status:** 581/581 тестов зелёные (100%), 0 ошибок mypy в 77 файлах, 0 ошибок ruff в 85 файлах, автономный бинарник `dist/GupkaCommander/GupkaCommander.exe` (70.51 MB) проверен (`exit code 0`).
 - **Verification Plan:** Все детерминированные сенсоры пройдены. Релиз готов.
 
 ## 4. Next Immediate Steps (Backlog)

@@ -160,8 +160,20 @@ def get_models_dir() -> Path:
     data_models = get_data_root() / "models"
     bundle_models = get_bundle_root() / "models"
 
-    if bundle_models.exists() and not data_models.exists():
+    if not is_frozen() and bundle_models.exists() and not data_models.exists():
         return bundle_models
 
     data_models.mkdir(parents=True, exist_ok=True)
     return data_models
+
+
+def get_bin_dir() -> Path:
+    """
+    Возвращает директорию хранения локальных исполняемых утилит (например, llama-server.exe).
+
+    Returns:
+        Абсолютный путь к директории bin внутри DATA_DIR.
+    """
+    bin_dir = get_data_root() / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    return bin_dir

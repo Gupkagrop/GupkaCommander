@@ -33,6 +33,7 @@ for package_name in ['sounddevice', 'piper', 'piper_phonemize', 'faster_whisper'
 hiddenimports = [
     'core',
     'core.paths',
+    'core.bootstrap',
     'core.app_finder',
     'core.os_controller',
     'core.failsafe',
@@ -54,6 +55,7 @@ hiddenimports = [
     'gui.chat_drawer',
     'gui.hotkey_manager',
     'gui.tray_icon',
+    'gui.setup_dialog',
     'gui.styles',
     'onnxruntime',
     'ctranslate2',

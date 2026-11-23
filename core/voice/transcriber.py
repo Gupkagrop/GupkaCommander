@@ -130,13 +130,24 @@ class FasterWhisperTranscriber:
 
             return self._load_model_safe()
 
+    def _resolve_model_target(self) -> str:
+        """Возвращает локальный каталог модели, если веса уже скачаны напрямую в download_root."""
+        if self._download_root is not None:
+            from pathlib import Path
+
+            root_dir = Path(self._download_root)
+            if (root_dir / "model.bin").is_file() and (root_dir / "config.json").is_file():
+                return str(root_dir)
+        return self._model_size_or_path
+
     def _load_model_safe(self) -> bool:
         """Безопасная загрузка модели внутри блокировки."""
         assert self._model_factory is not None
         try:
+            model_target = self._resolve_model_target()
             logger.info(
                 "Загрузка модели Faster-Whisper '%s' (device=%s, compute_type=%s)...",
-                self._model_size_or_path,
+                model_target,
                 self._device,
                 self._compute_type,
             )
@@ -149,7 +160,7 @@ class FasterWhisperTranscriber:
             if self._download_root is not None:
                 kwargs["download_root"] = self._download_root
 
-            self._model = self._model_factory(self._model_size_or_path, **kwargs)
+            self._model = self._model_factory(model_target, **kwargs)
             self._is_fallback = False
             logger.info("Модель Faster-Whisper успешно инициализирована.")
             return True

@@ -43,6 +43,7 @@ class TrayManager(QObject):
 
     show_hide_triggered = Signal()
     mute_toggled = Signal(bool)
+    models_triggered = Signal()
     settings_triggered = Signal()
     quit_requested = Signal()
 
@@ -93,7 +94,12 @@ class TrayManager(QObject):
         self._mute_action.toggled.connect(self._on_mute_action_toggled)
         self._menu.addAction(self._mute_action)
 
-        # 3. Настройки
+        # 3. Модели и зависимости
+        self._models_action = QAction("Модели и зависимости...", self)
+        self._models_action.triggered.connect(self._on_models_triggered)
+        self._menu.addAction(self._models_action)
+
+        # 4. Настройки
         self._settings_action = QAction("Настройки...", self)
         self._settings_action.triggered.connect(self._on_settings_triggered)
         self._menu.addAction(self._settings_action)
@@ -193,6 +199,10 @@ class TrayManager(QObject):
         """Обработка выбора пункта меню Настройки."""
         self.settings_triggered.emit()
 
+    def _on_models_triggered(self) -> None:
+        """Обработка выбора пункта меню Модели и зависимости."""
+        self.models_triggered.emit()
+
     def _on_quit_triggered(self) -> None:
         """Обработка выбора пункта меню Выход."""
         logger.info("Запрошен выход из приложения через системный трей.")
@@ -222,6 +232,11 @@ class TrayManager(QObject):
     def mute_action(self) -> QAction:
         """Возвращает действие меню Отключить микрофон."""
         return self._mute_action
+
+    @property
+    def models_action(self) -> QAction:
+        """Возвращает действие меню Модели и зависимости."""
+        return self._models_action
 
     @property
     def settings_action(self) -> QAction:

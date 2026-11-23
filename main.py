@@ -179,6 +179,10 @@ class GupkaCommanderApp(QObject):
         # Системный трей -> Действия
         self.tray_manager.show_hide_triggered.connect(self.spotlight_bar.toggle_visibility)
         self.tray_manager.mute_toggled.connect(self.handle_mute_toggled)
+        if hasattr(self.tray_manager, "models_triggered"):
+            self.tray_manager.models_triggered.connect(self.open_dependency_manager)
+        if hasattr(self.tray_manager, "settings_triggered"):
+            self.tray_manager.settings_triggered.connect(self.open_dependency_manager)
         self.tray_manager.quit_requested.connect(self.shutdown)
 
         # Корректное завершение при закрытии приложения
@@ -959,6 +963,13 @@ class GupkaCommanderApp(QObject):
             except Exception as exc:
                 logger.debug("Ошибка при остановке синтезатора: %s", exc)
 
+    def open_dependency_manager(self) -> None:
+        """Открывает диалог управления локальными моделями и зависимостями."""
+        from gui.setup_dialog import DependencySetupDialog
+
+        dialog = DependencySetupDialog(manage_mode=True)
+        dialog.exec()
+
     def start(self, start_hidden: bool = False) -> None:
         """
         Запуск всех подсистем приложения.
@@ -1063,6 +1074,16 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Запустить приложение свернутым в системный трей без показа SpotlightBar",
     )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Принудительно открыть окно проверки и загрузки локальных моделей при старте",
+    )
+    parser.add_argument(
+        "--skip-setup",
+        action="store_true",
+        help="Пропустить автоматическую проверку и диалог загрузки моделей при старте",
+    )
     return parser.parse_args()
 
 
@@ -1085,6 +1106,17 @@ def main() -> int:
     icon_path = get_icon_path()
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
+
+    # Проверка и загрузка недостающих моделей с разрешения пользователя до инициализации ядра
+    from gui.setup_dialog import run_startup_dependency_check
+
+    run_startup_dependency_check(
+        force_setup=bool(args.setup),
+        skip_setup=bool(args.skip_setup),
+        headless=bool(args.headless),
+        quiet=bool(args.quiet),
+        enable_voice=not args.no_voice,
+    )
 
     commander = GupkaCommanderApp(
         app=app,
