@@ -7,7 +7,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011-0078D4.svg?logo=windows11&logoColor=white)](https://www.microsoft.com/windows)
 [![Python Version](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![GUI Framework](https://img.shields.io/badge/GUI-PySide6%20%28Qt%206%29-41CD52.svg?logo=qt&logoColor=white)](https://doc.qt.io/qtforpython-6/)
-[![Tests](https://img.shields.io/badge/Tests-570%20Passed-brightgreen.svg)](#-тестирование-и-сенсоры-качества)
+[![Tests](https://img.shields.io/badge/Tests-588%20Passed-brightgreen.svg)](#-тестирование-и-сенсоры-качества)
 [![Code Style](https://img.shields.io/badge/Code%20Style-Ruff-black.svg?logo=ruff&logoColor=white)](https://github.com/astral-sh/ruff)
 [![Type Checking](https://img.shields.io/badge/Type%20Checking-mypy%20strict-blue.svg)](https://mypy-lang.org/)
 [![Hardware Profile](https://img.shields.io/badge/GPU%20Target-RTX%205050%20%7C%208GB%20VRAM-76B900.svg?logo=nvidia&logoColor=white)](#-аппаратный-профиль-и-бюджет-памяти)
@@ -285,7 +285,7 @@ GupkaCommander/
 Проект полностью защищен детерминированными сенсорами качества:
 
 ```powershell
-# Запуск полного набора тестов (570 тестов)
+# Запуск полного набора тестов (588 тестов)
 uv run pytest -q
 
 # Статический анализ кода (Ruff linter)

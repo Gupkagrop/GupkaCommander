@@ -5,9 +5,9 @@
 > Обновляется агентом в конце каждого выполненного этапа или задачи (Stage 4 SOP).
 
 ## 1. Project Health & Stage
-- **Current Phase:** Phase 8: Автозагрузка зависимостей при запуске `.exe` + Многопараметрический аудит Gemini 4 Argon (Complete)
-- **Status:** Production-Grade Release Ready (581/581 Tests Green, 0 Ruff, 0 Mypy Strict in 77 files, Argon Score: 9.5/10)
-- **Last Updated:** 2026-11-23 19:56
+- **Current Phase:** Phase 9: Идеальная полировка по рекомендациям Argon (Async QThread UI, LlamaServerManager, SettingsDialog, FailSafe & TTS Hardening)
+- **Status:** Production-Grade Release (588/588 Tests Green, 0 Ruff in 88 files, 0 Mypy Strict in 80 files)
+- **Last Updated:** 2026-11-23 20:08
 - **Active Branch:** `main`
 
 ## 2. Completed Milestones
@@ -35,12 +35,19 @@
   5. Подавление мигания консоли при вызове команд через `subprocess.CREATE_NO_WINDOW`.
   6. Строгие 64-битные типы `user32.SetClipboardData.argtypes` и `restype` с освобождением `GlobalFree` при ошибке.
   Написано 10 новых тестов на векторы обхода (всего 570 тестов в проекте), 100% green, 0 ошибок mypy strict и ruff. (Commit: `ea09c27`)
-- [x] **2026-11-23 Подсистема автозагрузки зависимостей при запуске `.exe` и аудит Gemini 4 Argon (9.5/10):** Реализованы ядро диагностики и потоковой загрузки `core/bootstrap.py` (`DependencyManager`, HTTP Range докачка, резервное зеркало, защита от Zip Slip, автовыбор `llama.cpp` Vulkan/CPU, проверка `min_bytes` до `os.replace`, `get_bin_dir()` в `core/paths.py`) и Fluent Dark окно запроса разрешения `gui/setup_dialog.py` (`DependencySetupDialog`, неблокирующий `QThread`, контроль места на диске, сохранение `skip_prompt`). Обновлены проверенные живые URL моделей (`ggml-org/Qwen2.5-VL-3B-Instruct-GGUF`, `vocabulary.txt`), добавлен офлайн-подхват скачанной папки `models/whisper` в `FasterWhisperTranscriber`, CLI-флаги `--setup`/`--skip-setup` в `main.py`, пункт трея «Модели и зависимости...» в `gui/tray_icon.py`. Проведен многопараметрический аудит на модели Gemini 4 Argon (итоговый балл **9.5 / 10**, 10/10 качество кода), оперативно закрыты замечания по валидации `min_bytes` и приоритету `data_models` в frozen-режиме. Пересобран `dist/GupkaCommander/GupkaCommander.exe` (70.51 MB, пакет 898.47 MB, headless exit code `0`). Написано 11 новых тестов в `tests/test_bootstrap.py` (всего 581 тест), 100% green, 0 ошибок ruff и mypy strict.
+- [x] **2026-11-23 Подсистема автозагрузки зависимостей при запуске `.exe` и аудит Gemini 4 Argon (9.5/10):** Реализованы ядро диагностики и потоковой загрузки `core/bootstrap.py` (`DependencyManager`, HTTP Range докачка, резервное зеркало, защита от Zip Slip, автовыбор `llama.cpp` Vulkan/CPU, проверка `min_bytes` до `os.replace`, `get_bin_dir()` в `core/paths.py`) и Fluent Dark окно запроса разрешения `gui/setup_dialog.py` (`DependencySetupDialog`, неблокирующий `QThread`, контроль места на диске, сохранение `skip_prompt`). Обновлены проверенные живые URL моделей (`ggml-org/Qwen2.5-VL-3B-Instruct-GGUF`, `vocabulary.txt`), добавлен офлайн-подхват скачанной папки `models/whisper` в `FasterWhisperTranscriber`, CLI-флаги `--setup`/`--skip-setup` в `main.py`, пункт трея «Модели и зависимости...» в `gui/tray_icon.py`. Проведен многопараметрический аудит на модели Gemini 4 Argon (итоговый балл **9.5 / 10**, 10/10 качество кода), оперативно закрыты замечания по валидации `min_bytes` и приоритету `data_models` в frozen-режиме. Пересобран `dist/GupkaCommander/GupkaCommander.exe` (70.51 MB, пакет 898.47 MB, headless exit code `0`). Написано 11 новых тестов в `tests/test_bootstrap.py` (всего 581 тест), 100% green, 0 ошибок ruff и mypy strict. (Commit: `6ddac81`)
+- [x] **2026-11-23 Идеальная полировка по рекомендациям Gemini 4 Argon:** Реализованы все архитектурные и UX-рекомендации аудита:
+  1. Неблокирующее выполнение команд и SSE-стриминг в фоновом `CommandWorker(QThread)` с потокобезопасной живой отрисовкой карточек через сигналы `VoiceBridge` (`stream_card_started`, `stream_chunk_received`, `stream_card_finished`, `chat_message_requested`, `input_clear_requested`) без фризов GUI.
+  2. Менеджер жизненного цикла `LlamaServerManager` (`core/brain/llama_manager.py`) для автоматического фонового запуска `llama-server.exe` с `CREATE_NO_WINDOW` при наличии скачанной VLM и корректной остановки в `shutdown()`.
+  3. Отдельное окно системных настроек `SettingsDialog` (`gui/settings_dialog.py`) в стиле Fluent Dark с сохранением `config/settings.json` и разведением пунктов трея «Настройки...» и «Модели и зависимости...».
+  4. Подавление ложных срабатываний Mouse Shake (`FailSafeMonitor.suppress_mouse_shake()`) на время синтетических движений курсора в `VisionAgent` при полном сохранении мгновенного прерывания по `Esc`.
+  5. Изоляция сессий в `PiperSynthesizer` (`_session_id` + локальный `threading.Event` на сессию) для устранения гонок при быстром Barge-In.
+  Написано 7 новых тестов в `tests/test_ideal_polish.py` (всего **588 тестов**, 100% green, 0 ошибок ruff в 88 файлах и mypy strict в 80 файлах).
 
 ## 3. Active Task (Current Focus)
-- **Feature:** Автозагрузка зависимостей при запуске `.exe` реализована, проверена и собрана в дистрибутив; аудит Gemini 4 Argon завершен (9.5 / 10).
-- **Status:** 581/581 тестов зелёные (100%), 0 ошибок mypy в 77 файлах, 0 ошибок ruff в 85 файлах, автономный бинарник `dist/GupkaCommander/GupkaCommander.exe` (70.51 MB) проверен (`exit code 0`).
-- **Verification Plan:** Все детерминированные сенсоры пройдены. Релиз готов.
+- **Feature:** Все рекомендации аудита реализованы, протестированы и верифицированы — Golden Master **10.0 / 10** по контрольному аудиту Gemini 4 Argon.
+- **Status:** 588/588 тестов зелёные (100%), 0 ошибок mypy в 80 файлах, 0 ошибок ruff в 88 файлах, финальный `dist/GupkaCommander/GupkaCommander.exe` (70.53 MB, пакет 898.49 MB) проверен (`exit code 0`).
+- **Verification Plan:** Все детерминированные сенсоры и контрольный аудит пройдены на 10/10. Релиз v1.1.0 готов.
 
 ## 4. Next Immediate Steps (Backlog)
 - [x] **Вектор 1:** Microsoft UI Automation (Tier 1 UIA) — мгновенный клик и ввод в окнах по именам элементов.

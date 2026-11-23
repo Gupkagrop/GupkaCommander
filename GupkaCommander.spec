@@ -18,6 +18,7 @@ project_root = Path('.').resolve()
 datas = [
     (str(project_root / 'assets'), 'assets'),
     (str(project_root / 'config' / 'commands.json'), 'config'),
+    (str(project_root / 'config' / 'settings.json'), 'config'),
 ]
 
 # Сбор данных пакетов (sounddevice, piper, faster_whisper) при их наличии
@@ -39,6 +40,7 @@ hiddenimports = [
     'core.failsafe',
     'core.routing.intent_router',
     'core.brain.llm_client',
+    'core.brain.llama_manager',
     'core.vision.screen_capture',
     'core.vision.vision_agent',
     'core.uia.uia_controller',
@@ -56,6 +58,7 @@ hiddenimports = [
     'gui.hotkey_manager',
     'gui.tray_icon',
     'gui.setup_dialog',
+    'gui.settings_dialog',
     'gui.styles',
     'onnxruntime',
     'ctranslate2',

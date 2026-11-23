@@ -110,6 +110,7 @@ class PiperSynthesizer:
         self._is_initialized: bool = False
 
         self._is_speaking: bool = False
+        self._session_id: int = 0
         self._stop_event: threading.Event = threading.Event()
         self._stream_lock: threading.Lock = threading.Lock()
         self._current_stream: Any | None = None
@@ -244,23 +245,32 @@ class PiperSynthesizer:
 
     def is_speaking(self) -> bool:
         """Проверяет, активно ли воспроизведение речи в данный момент."""
-        if not self._is_speaking:
+        with self._stream_lock:
+            speaking = self._is_speaking
+        if not speaking:
             return False
 
         if self._backend == self.BACKEND_SAPI and self._sapi_voice is not None:
             try:
                 status = getattr(self._sapi_voice, "Status", None)
                 if status is not None and getattr(status, "RunningState", 1) == 1:
-                    self._is_speaking = False
+                    with self._stream_lock:
+                        self._is_speaking = False
                     return False
             except Exception:
                 pass
 
-        return self._is_speaking
+        with self._stream_lock:
+            return self._is_speaking
 
     def stop(self) -> None:
         """Мгновенная остановка воспроизведения и генерации речи (Barge-In)."""
-        self._stop_event.set()
+        with self._stream_lock:
+            self._session_id += 1
+            self._stop_event.set()
+            self._is_speaking = False
+            active_stream = self._current_stream
+            self._current_stream = None
 
         # 0. Аварийный сброс очереди предложений потокового синтеза
         if self._sentence_queue is not None:
@@ -275,13 +285,11 @@ class PiperSynthesizer:
                 pass
 
         # 1. Аварийный сброс активного аудиопотока sounddevice
-        with self._stream_lock:
-            if self._current_stream is not None:
-                try:
-                    self._current_stream.abort()
-                except Exception as exc:
-                    logger.debug("Ошибка при прерывании sounddevice stream: %s", exc)
-                self._current_stream = None
+        if active_stream is not None:
+            try:
+                active_stream.abort()
+            except Exception as exc:
+                logger.debug("Ошибка при прерывании sounddevice stream: %s", exc)
 
         # 2. Аварийный сброс буфера SAPI
         if self._backend == self.BACKEND_SAPI and self._sapi_voice is not None:
@@ -290,8 +298,6 @@ class PiperSynthesizer:
                 self._sapi_voice.Speak("", 2)
             except Exception as exc:
                 logger.debug("Ошибка при сбросе очереди SAPI: %s", exc)
-
-        self._is_speaking = False
 
         # Ожидаем завершения потока воспроизведения без взаимной блокировки
         t = self._playback_thread
@@ -304,6 +310,22 @@ class PiperSynthesizer:
         if p is not None and p.is_alive() and p is not threading.current_thread():
             p.join(timeout=0.3)
         self._producer_thread = None
+
+    def _begin_session(self) -> tuple[int, threading.Event]:
+        """Создает изолированную сессию воспроизведения с собственным событием остановки."""
+        session_stop = threading.Event()
+        with self._stream_lock:
+            self._session_id += 1
+            self._stop_event = session_stop
+            self._is_speaking = True
+            return self._session_id, session_stop
+
+    def _finish_session(self, session_id: int) -> None:
+        """Сбрасывает состояние воспроизведения только если сессия все еще актуальна."""
+        with self._stream_lock:
+            if self._session_id == session_id:
+                self._is_speaking = False
+                self._current_stream = None
 
     def speak(self, text: str, blocking: bool = False) -> None:
         """Произносит заданный текст.
@@ -323,16 +345,15 @@ class PiperSynthesizer:
         if not self.is_initialized:
             self.initialize()
 
-        self._stop_event.clear()
+        session_id, session_stop = self._begin_session()
 
         if blocking:
-            self._run_playback(clean_text)
+            self._run_playback(clean_text, session_id=session_id, stop_event=session_stop)
             return
 
-        self._is_speaking = True
         self._playback_thread = threading.Thread(
             target=self._run_playback,
-            args=(clean_text,),
+            args=(clean_text, session_id, session_stop),
             name="PiperSynthesizerPlayback",
             daemon=True,
         )
@@ -356,7 +377,7 @@ class PiperSynthesizer:
         if not self.is_initialized:
             self.initialize()
 
-        self._stop_event.clear()
+        session_id, session_stop = self._begin_session()
         sentence_queue: queue.Queue[str | None] = queue.Queue()
         self._sentence_queue = sentence_queue
         producer_done = threading.Event()
@@ -364,7 +385,7 @@ class PiperSynthesizer:
         def _producer() -> None:
             try:
                 for sentence in sentence_iterator:
-                    if self._stop_event.is_set():
+                    if session_stop.is_set():
                         break
                     clean_sentence = sentence.strip() if sentence else ""
                     if clean_sentence:
@@ -376,9 +397,8 @@ class PiperSynthesizer:
                 sentence_queue.put(None)
 
         def _consumer() -> None:
-            self._is_speaking = True
             try:
-                while not self._stop_event.is_set():
+                while not session_stop.is_set():
                     try:
                         item = sentence_queue.get(timeout=0.05)
                     except queue.Empty:
@@ -386,13 +406,13 @@ class PiperSynthesizer:
                             break
                         continue
 
-                    if item is None or self._stop_event.is_set():
+                    if item is None or session_stop.is_set():
                         break
 
                     clean_text = item.strip()
-                    if clean_text and not self._stop_event.is_set():
+                    if clean_text and not session_stop.is_set():
                         try:
-                            self._play_sentence(clean_text)
+                            self._play_sentence(clean_text, stop_event=session_stop)
                         except Exception as exc:
                             logger.error(
                                 "Ошибка при воспроизведении предложения (%s): %s",
@@ -400,11 +420,8 @@ class PiperSynthesizer:
                                 exc,
                             )
             finally:
-                self._is_speaking = False
-                with self._stream_lock:
-                    self._current_stream = None
+                self._finish_session(session_id)
 
-        self._is_speaking = True
         self._producer_thread = threading.Thread(
             target=_producer,
             name="PiperSynthesizerProducer",
@@ -424,33 +441,45 @@ class PiperSynthesizer:
             if self._producer_thread.is_alive():
                 self._producer_thread.join(timeout=0.5)
 
-    def _play_sentence(self, text: str) -> None:
+    def _play_sentence(self, text: str, stop_event: threading.Event | None = None) -> None:
         """Синтез и вывод одного предложения в активный бэкенд."""
+        active_stop = stop_event or self._stop_event
         if self._backend == self.BACKEND_PIPER:
-            self._play_piper(text)
+            self._play_piper(text, stop_event=active_stop)
         elif self._backend == self.BACKEND_SAPI:
-            self._play_sapi(text)
+            self._play_sapi(text, stop_event=active_stop)
         else:
-            self._play_mock(text)
+            self._play_mock(text, stop_event=active_stop)
 
-    def _run_playback(self, text: str) -> None:
+    def _run_playback(
+        self,
+        text: str,
+        session_id: int | None = None,
+        stop_event: threading.Event | None = None,
+    ) -> None:
         """Потоковая процедура озвучивания одиночного фрагмента."""
-        self._is_speaking = True
+        active_id = session_id if session_id is not None else self._session_id
+        active_stop = stop_event or self._stop_event
+        with self._stream_lock:
+            if self._session_id == active_id:
+                self._is_speaking = True
         try:
-            self._play_sentence(text)
+            self._play_sentence(text, stop_event=active_stop)
         except Exception as exc:
             logger.error("Ошибка при воспроизведении речи (%s): %s", self._backend, exc)
         finally:
-            self._is_speaking = False
-            with self._stream_lock:
-                self._current_stream = None
+            self._finish_session(active_id)
 
-    def _play_piper(self, text: str) -> None:
+    def _play_piper(self, text: str, stop_event: threading.Event | None = None) -> None:
         """Потоковый синтез и вывод через sounddevice.OutputStream."""
-        assert self._voice is not None
+        active_stop = stop_event or self._stop_event
+        if self._voice is None:
+            logger.warning("Модель Piper не инициализирована. Переход на mock.")
+            self._play_mock(text, stop_event=active_stop)
+            return
         if self._output_stream_factory is None:
             logger.warning("Аудиоустройство недоступно. Переход на mock.")
-            self._play_mock(text)
+            self._play_mock(text, stop_event=active_stop)
             return
 
         sample_rate = getattr(self._voice, "sample_rate", self._sample_rate)
@@ -463,14 +492,14 @@ class PiperSynthesizer:
                 self._current_stream = stream
 
             for chunk in chunk_iter:
-                if self._stop_event.is_set():
+                if active_stop.is_set():
                     break
 
                 audio_data = self._extract_float32_audio(chunk)
                 if audio_data is None or audio_data.size == 0:
                     continue
 
-                if self._stream_audio_blocks(stream, audio_data):
+                if self._stream_audio_blocks(stream, audio_data, stop_event=active_stop):
                     break
 
     def _extract_float32_audio(self, chunk: Any) -> np.ndarray | None:
@@ -486,13 +515,19 @@ class PiperSynthesizer:
 
         return None
 
-    def _stream_audio_blocks(self, stream: Any, audio_data: np.ndarray) -> bool:
+    def _stream_audio_blocks(
+        self,
+        stream: Any,
+        audio_data: np.ndarray,
+        stop_event: threading.Event | None = None,
+    ) -> bool:
         """Потоковая запись фрагментов в stream с регулярной проверкой прерывания."""
+        active_stop = stop_event or self._stop_event
         block_size = 1024
         total_len = len(audio_data)
 
         for i in range(0, total_len, block_size):
-            if self._stop_event.is_set():
+            if active_stop.is_set():
                 return True
             block = audio_data[i : i + block_size]
             try:
@@ -503,32 +538,36 @@ class PiperSynthesizer:
 
         return False
 
-    def _play_sapi(self, text: str) -> None:
+    def _play_sapi(self, text: str, stop_event: threading.Event | None = None) -> None:
         """Воспроизведение через Windows SAPI5."""
-        assert self._sapi_voice is not None
+        active_stop = stop_event or self._stop_event
+        if self._sapi_voice is None:
+            self._play_mock(text, stop_event=active_stop)
+            return
         with _com_initialized():
             # Флаг 1: SVSFlagsAsync (асинхронное воспроизведение)
             self._sapi_voice.Speak(text, 1)
 
             # Ожидаем завершения фразы или сигнала прерывания (Barge-In)
-            while not self._stop_event.is_set():
+            while not active_stop.is_set():
                 status = getattr(self._sapi_voice, "Status", None)
                 if status is not None and getattr(status, "RunningState", 1) == 1:
                     break
                 time.sleep(0.02)
 
-            if self._stop_event.is_set():
+            if active_stop.is_set():
                 try:
                     self._sapi_voice.Speak("", 2)
                 except Exception:
                     pass
 
-    def _play_mock(self, text: str) -> None:
+    def _play_mock(self, text: str, stop_event: threading.Event | None = None) -> None:
         """Эмуляция синтеза речи для тестов и сред без аудиоустройств."""
+        active_stop = stop_event or self._stop_event
         duration = min(0.02 * len(text), 0.3)
         step = 0.02
         elapsed = 0.0
 
-        while elapsed < duration and not self._stop_event.is_set():
+        while elapsed < duration and not active_stop.is_set():
             time.sleep(step)
             elapsed += step

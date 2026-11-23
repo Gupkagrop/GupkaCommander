@@ -6,7 +6,8 @@ import collections
 import math
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from types import TracebackType
 from typing import Any
 
@@ -42,6 +43,23 @@ class FailSafeMonitor:
         self._keyboard_listener: Any | None = None
         self._mouse_listener: Any | None = None
         self._running: bool = False
+        self._suppress_shake_depth: int = 0
+
+    @contextmanager
+    def suppress_mouse_shake(self) -> Iterator[None]:
+        """Временно подавляет детекцию потряхивания на время синтетических движений агента.
+
+        Перехват клавиши Esc продолжает работать без задержек.
+        """
+        with self._lock:
+            self._suppress_shake_depth += 1
+            self._mouse_history.clear()
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._suppress_shake_depth = max(0, self._suppress_shake_depth - 1)
+                self._mouse_history.clear()
 
     @property
     def abort_reason(self) -> str | None:
@@ -108,7 +126,7 @@ class FailSafeMonitor:
         """Обработчик событий перемещения курсора мыши для поиска резких колебаний."""
         now = time.monotonic()
         with self._lock:
-            if self.abort_event.is_set():
+            if self.abort_event.is_set() or self._suppress_shake_depth > 0:
                 return
             self._mouse_history.append((now, float(x), float(y)))
             cutoff = now - self._shake_window_seconds

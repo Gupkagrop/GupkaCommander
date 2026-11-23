@@ -207,6 +207,32 @@ class VisionAgent:
         step_delay: float,
     ) -> None:
         """Интерполяция пути курсора по гладкой S-кривой."""
+        suppress_ctx = (
+            self._monitor.suppress_mouse_shake()
+            if hasattr(self._monitor, "suppress_mouse_shake")
+            else None
+        )
+        if suppress_ctx is None:
+            self._run_mouse_interpolation_steps(
+                start_x, start_y, target_x, target_y, total_steps, step_delay
+            )
+            return
+
+        with suppress_ctx:
+            self._run_mouse_interpolation_steps(
+                start_x, start_y, target_x, target_y, total_steps, step_delay
+            )
+
+    def _run_mouse_interpolation_steps(
+        self,
+        start_x: int,
+        start_y: int,
+        target_x: int,
+        target_y: int,
+        total_steps: int,
+        step_delay: float,
+    ) -> None:
+        """Пошаговое перемещение курсора с проверкой прерывания на каждом шаге."""
         for step in range(1, total_steps + 1):
             self._monitor.check_abort()
             ratio = step / total_steps

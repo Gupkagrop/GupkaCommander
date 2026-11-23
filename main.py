@@ -17,14 +17,15 @@ import queue
 import subprocess
 import sys
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from core.app_finder import AppFinder
+from core.brain.llama_manager import LlamaServerManager
 from core.brain.llm_client import LocalLLMClient
 from core.failsafe import FailSafeMonitor, get_failsafe_monitor
 from core.memory import MemoryManager
@@ -48,16 +49,41 @@ logger = logging.getLogger("gupka.main")
 
 class VoiceBridge(QObject):
     """
-    Потокобезопасный мост между фоновым потоком VoicePipeline и главным GUI потоком Qt.
+    Потокобезопасный мост между фоновыми потоками (VoicePipeline, CommandWorker) и GUI Qt.
 
     Принимает вызовы из фонового потока и пересылает их через сигналы Qt,
-    гарантируя безопасное обновление виджетов без кросс-потоковых ошибок.
+    гарантируя безопасное обновление виджетов без кросс-потоковых ошибок и фризов UI.
     """
 
     transcription_received = Signal(str)
     state_changed = Signal(str)
     audio_level_received = Signal(float)
+    chat_message_requested = Signal(str, str, str)
+    input_clear_requested = Signal()
+    stream_card_started = Signal()
     stream_chunk_received = Signal(str)
+    stream_card_finished = Signal(str)
+
+
+class CommandWorker(QThread):
+    """Фоновый поток Qt для неблокирующего выполнения команд и SSE-стриминга."""
+
+    command_completed = Signal(str)
+
+    def __init__(
+        self,
+        runner: Callable[[str], str],
+        command_text: str,
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._runner = runner
+        self._command_text = command_text
+
+    def run(self) -> None:
+        """Выполняет команду в фоновом потоке и отправляет итоговый ответ сигналом."""
+        result = self._runner(self._command_text)
+        self.command_completed.emit(result)
 
 
 class GupkaCommanderApp(QObject):
@@ -87,9 +113,12 @@ class GupkaCommanderApp(QObject):
         uia_manager: UIAutomationManager | None = None,
         failsafe_monitor: FailSafeMonitor | None = None,
         memory_manager: MemoryManager | None = None,
+        llama_manager: LlamaServerManager | None = None,
         enable_voice: bool = True,
         enable_hotkey: bool = True,
         enable_tray: bool = True,
+        enable_llm_autostart: bool = False,
+        async_execution: bool = False,
     ) -> None:
         """
         Инициализация главного контроллера с поддержкой внедрения зависимостей.
@@ -132,6 +161,12 @@ class GupkaCommanderApp(QObject):
         self.memory_manager = memory_manager or MemoryManager(
             db_path=get_database_path("memory.db")
         )
+        self.llama_manager = llama_manager or LlamaServerManager()
+        self.enable_llm_autostart = enable_llm_autostart
+        self._async_execution: bool = async_execution
+        self._command_worker: CommandWorker | None = None
+        self._active_stream_card: Any | None = None
+        self._stream_ui_tokens: list[str] = []
         self._current_response_streamed: bool = False
         self._audio_streamed: bool = False
         self._is_shutting_down: bool = False
@@ -164,14 +199,19 @@ class GupkaCommanderApp(QObject):
 
     def _connect_signals(self) -> None:
         """Связывание сигналов и слотов между ядром, голосом и интерфейсом."""
-        # Мост голоса -> GUI
+        # Мост голоса и фонового воркера -> GUI
         self.voice_bridge.transcription_received.connect(self.handle_transcription)
         self.voice_bridge.state_changed.connect(self.spotlight_bar.set_pipeline_state)
         self.voice_bridge.state_changed.connect(self.tray_manager.set_state)
         self.voice_bridge.audio_level_received.connect(self.spotlight.waveform.set_audio_level)
+        self.voice_bridge.chat_message_requested.connect(self._ui_add_chat_message)
+        self.voice_bridge.input_clear_requested.connect(self._ui_clear_input)
+        self.voice_bridge.stream_card_started.connect(self._ui_begin_stream_card)
+        self.voice_bridge.stream_chunk_received.connect(self._ui_on_stream_chunk)
+        self.voice_bridge.stream_card_finished.connect(self._ui_finish_stream_card)
 
         # SpotlightBar -> Выполнение команд
-        self.spotlight_bar.command_submitted.connect(self.execute_command)
+        self.spotlight_bar.command_submitted.connect(self._handle_submitted_command)
 
         # Горячие клавиши -> Видимость SpotlightBar
         self.hotkey_manager.hotkey_pressed.connect(self.spotlight_bar.toggle_visibility)
@@ -182,7 +222,7 @@ class GupkaCommanderApp(QObject):
         if hasattr(self.tray_manager, "models_triggered"):
             self.tray_manager.models_triggered.connect(self.open_dependency_manager)
         if hasattr(self.tray_manager, "settings_triggered"):
-            self.tray_manager.settings_triggered.connect(self.open_dependency_manager)
+            self.tray_manager.settings_triggered.connect(self.open_settings_dialog)
         self.tray_manager.quit_requested.connect(self.shutdown)
 
         # Корректное завершение при закрытии приложения
@@ -201,6 +241,63 @@ class GupkaCommanderApp(QObject):
         """Коллбэк из фонового потока VoicePipeline при обновлении громкости входящего звука."""
         self.voice_bridge.audio_level_received.emit(level)
 
+    def _is_gui_thread(self) -> bool:
+        """Возвращает True, если вызов выполняется в главном GUI-потоке Qt."""
+        return QThread.currentThread() == self._app.thread()
+
+    def _ui_add_chat_message(self, role: str, text: str, status: str) -> None:
+        """Слот главного потока Qt для добавления карточки сообщения в ChatDrawer."""
+        self.spotlight_bar.add_chat_message(role, text, status=status)
+
+    def _ui_clear_input(self) -> None:
+        """Слот главного потока Qt для очистки поля ввода SpotlightBar."""
+        self.spotlight_bar.clear_input()
+
+    def _emit_chat_message(self, role: str, text: str, status: str = "done") -> None:
+        """Потокобезопасное добавление сообщения в ChatDrawer."""
+        if self._is_gui_thread():
+            self.spotlight_bar.add_chat_message(role, text, status=status)
+            return
+        self.voice_bridge.chat_message_requested.emit(role, text, status)
+
+    def _emit_clear_input(self) -> None:
+        """Потокобезопасная очистка поля ввода SpotlightBar."""
+        if self._is_gui_thread():
+            self.spotlight_bar.clear_input()
+            return
+        self.voice_bridge.input_clear_requested.emit()
+
+    def _handle_submitted_command(self, text: str) -> None:
+        """Обработчик сигнала SpotlightBar.command_submitted."""
+        if self._async_execution:
+            self.execute_command_async(text)
+            return
+        self.execute_command(text)
+
+    def execute_command_async(self, text: str) -> bool:
+        """Запускает выполнение команды в фоновом QThread без блокировки GUI.
+
+        Returns:
+            True, если фоновый воркер запущен; False, если текст пуст или команда уже выполняется.
+        """
+        clean_text = text.strip()
+        if not clean_text:
+            return False
+
+        with self._execution_lock:
+            is_busy = self._is_executing_command or (
+                self._command_worker is not None and self._command_worker.isRunning()
+            )
+        if is_busy:
+            msg = "Предыдущая операция еще не завершена. Пожалуйста, подождите."
+            self._emit_chat_message("assistant", msg, status="error")
+            return False
+
+        worker = CommandWorker(self.execute_command, clean_text, parent=self)
+        self._command_worker = worker
+        worker.start()
+        return True
+
     def handle_transcription(self, text: str) -> None:
         """
         Обработка голосовой транскрипции на главном потоке Qt.
@@ -214,6 +311,9 @@ class GupkaCommanderApp(QObject):
 
         logger.info("Получена голосовая транскрипция: %s", clean_text)
         self.spotlight_bar.set_input_text(clean_text)
+        if self._async_execution:
+            self.execute_command_async(clean_text)
+            return
         self.execute_command(clean_text)
 
     def execute_command(self, text: str) -> str:
@@ -241,7 +341,7 @@ class GupkaCommanderApp(QObject):
             if self._is_executing_command:
                 logger.warning("Команда уже выполняется, повторный запрос отклонен: %s", clean_text)
                 msg = "Предыдущая операция еще не завершена. Пожалуйста, подождите."
-                self.spotlight_bar.add_chat_message("assistant", msg, status="error")
+                self._emit_chat_message("assistant", msg, status="error")
                 return msg
             self._is_executing_command = True
 
@@ -253,8 +353,8 @@ class GupkaCommanderApp(QObject):
                 logger.debug("Ошибка сброса FailSafe: %s", exc)
 
             # Добавляем сообщение пользователя в историю
-            self.spotlight_bar.add_chat_message("user", clean_text, status="done")
-            self.spotlight_bar.clear_input()
+            self._emit_chat_message("user", clean_text, status="done")
+            self._emit_clear_input()
 
             self._current_response_streamed = False
             self._audio_streamed = False
@@ -302,7 +402,7 @@ class GupkaCommanderApp(QObject):
 
             # Добавляем ответ ассистента в историю, если он не был добавлен потоком
             if not self._current_response_streamed:
-                self.spotlight_bar.add_chat_message("assistant", response_text, status="done")
+                self._emit_chat_message("assistant", response_text, status="done")
 
             # Озвучиваем ответ через TTS, если не было потокового воспроизведения
             if not self._audio_streamed and self.enable_voice and not self.tray_manager.is_muted():
@@ -645,6 +745,13 @@ class GupkaCommanderApp(QObject):
             logger.warning("Ошибка при визуальном клике VisionAgent: %s", exc)
             return f"Элемент '{elem_name}' не найден на экране через визуальный анализ."
 
+    def _has_stream_drawer(self) -> bool:
+        """Проверяет, поддерживает ли ChatDrawer потоковое создание карточек."""
+        drawer = getattr(self.spotlight_bar, "chat_drawer", None)
+        if callable(drawer):
+            drawer = drawer()
+        return drawer is not None and hasattr(drawer, "add_message")
+
     def _setup_stream_card(self) -> Any | None:
         """Создает карточку ассистента в ChatDrawer для отображения живой печати."""
         drawer = getattr(self.spotlight_bar, "chat_drawer", None)
@@ -660,9 +767,35 @@ class GupkaCommanderApp(QObject):
                 drawer.toggle(expand=True)
         return card
 
+    def _ui_begin_stream_card(self) -> None:
+        """Слот главного потока Qt: открывает новую карточку для потокового вывода."""
+        self._stream_ui_tokens = []
+        self._active_stream_card = self._setup_stream_card()
+
+    def _ui_on_stream_chunk(self, chunk: str) -> None:
+        """Слот главного потока Qt: дописывает входящий токен в активную карточку чата."""
+        self._stream_ui_tokens.append(chunk)
+        card = self._active_stream_card
+        if card is not None and hasattr(card, "set_text"):
+            card.set_text("".join(self._stream_ui_tokens))
+
+    def _ui_finish_stream_card(self, status: str) -> None:
+        """Слот главного потока Qt: завершает потоковую карточку с указанным статусом."""
+        card = self._active_stream_card
+        if card is not None and hasattr(card, "set_status"):
+            card.set_status(status)
+        self._active_stream_card = None
+        self._stream_ui_tokens = []
+
     def _stream_cognitive_response(self, text: str) -> str:
-        """Потоковая генерация ответа через LLM с озвучиванием и живой печатью."""
-        card = self._setup_stream_card()
+        """Потоковая генерация ответа через LLM с озвучиванием и неблокирующей живой печатью."""
+        has_drawer = self._has_stream_drawer()
+        if has_drawer:
+            if self._is_gui_thread():
+                self._ui_begin_stream_card()
+            else:
+                self.voice_bridge.stream_card_started.emit()
+
         accumulator = SentenceAccumulator()
         sentence_queue: queue.Queue[str | None] = queue.Queue()
 
@@ -700,13 +833,14 @@ class GupkaCommanderApp(QObject):
                 if self.failsafe_monitor.is_interrupted():
                     if synthesizer is not None and hasattr(synthesizer, "stop"):
                         synthesizer.stop()
-                    if card is not None and hasattr(card, "set_status"):
-                        card.set_status("error")
+                    if has_drawer:
+                        if self._is_gui_thread():
+                            self._ui_finish_stream_card("error")
+                        else:
+                            self.voice_bridge.stream_card_finished.emit("error")
                     raise InterruptedError("Операция экстренно прервана пользователем (FailSafe).")
 
                 tokens.append(chunk)
-                if card is not None and hasattr(card, "set_text"):
-                    card.set_text("".join(tokens))
                 try:
                     self.voice_bridge.stream_chunk_received.emit(chunk)
                 except Exception as exc:
@@ -724,9 +858,11 @@ class GupkaCommanderApp(QObject):
                 sentence_queue.put(None)
 
         full_text = "".join(tokens).strip()
-        if card is not None:
-            if hasattr(card, "set_status"):
-                card.set_status("done")
+        if has_drawer:
+            if self._is_gui_thread():
+                self._ui_finish_stream_card("done")
+            else:
+                self.voice_bridge.stream_card_finished.emit("done")
             self._current_response_streamed = True
 
         return full_text
@@ -970,6 +1106,13 @@ class GupkaCommanderApp(QObject):
         dialog = DependencySetupDialog(manage_mode=True)
         dialog.exec()
 
+    def open_settings_dialog(self) -> None:
+        """Открывает окно системных настроек GupkaCommander."""
+        from gui.settings_dialog import SettingsDialog
+
+        dialog = SettingsDialog(on_open_models=self.open_dependency_manager)
+        dialog.exec()
+
     def start(self, start_hidden: bool = False) -> None:
         """
         Запуск всех подсистем приложения.
@@ -985,6 +1128,14 @@ class GupkaCommanderApp(QObject):
             self.failsafe_monitor.start()
         except Exception as exc:
             logger.warning("Не удалось запустить FailSafeMonitor: %s", exc)
+
+        # 0.5. Автозапуск локального llama-server.exe в фоне (если скачан VLM)
+        if self.enable_llm_autostart:
+            threading.Thread(
+                target=self.llama_manager.start,
+                name="LlamaServerAutostart",
+                daemon=True,
+            ).start()
 
         # 1. Системный трей
         if self.enable_tray:
@@ -1013,11 +1164,27 @@ class GupkaCommanderApp(QObject):
         self._is_shutting_down = True
         logger.info("Остановка GupkaCommander...")
 
-        # 0. Остановка монитора безопасности FailSafe
+        # 0. Остановка активного фонового воркера команд
+        worker = self._command_worker
+        if worker is not None and worker.isRunning():
+            try:
+                self.failsafe_monitor.trigger_abort("Application shutdown")
+            except Exception:
+                pass
+            worker.wait(1500)
+        self._command_worker = None
+
+        # 0.5. Остановка монитора безопасности FailSafe
         try:
             self.failsafe_monitor.stop()
         except Exception as exc:
             logger.debug("Ошибка при остановке FailSafeMonitor: %s", exc)
+
+        # 1. Остановка управляемого процесса llama-server.exe
+        try:
+            self.llama_manager.stop()
+        except Exception as exc:
+            logger.debug("Ошибка при остановке LlamaServerManager: %s", exc)
 
         if self.enable_hotkey:
             try:
@@ -1123,6 +1290,8 @@ def main() -> int:
         enable_voice=not args.no_voice,
         enable_hotkey=not args.no_hotkey,
         enable_tray=not args.no_tray,
+        enable_llm_autostart=not args.headless,
+        async_execution=not args.headless,
     )
 
     commander.start(start_hidden=bool(args.quiet))
