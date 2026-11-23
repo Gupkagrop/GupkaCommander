@@ -3,15 +3,15 @@ setlocal
 
 rem ==============================================================================
 rem GupkaCommander: Скрипт запуска локального сервера llama.cpp (llama-server.exe)
-rem Модель: Qwen2.5-VL-3B-Instruct (GGUF Q4_K_M + mmproj F16)
+rem Модель: Qwen3-VL-4B-Instruct (GGUF Q4_K_M + mmproj Q8_0)
 rem Порт: 8080 (совместимо с OpenAI API /v1)
 rem ==============================================================================
 
 rem Переход в корневую директорию проекта
 cd /d "%~dp0\.."
 
-set "MODEL_PATH=models\llm\qwen2.5-vl-3b-instruct-q4_k_m.gguf"
-set "MMPROJ_PATH=models\llm\qwen2.5-vl-3b-mmproj-f16.gguf"
+set "MODEL_PATH=models\llm\qwen3-vl-4b-instruct-q4_k_m.gguf"
+set "MMPROJ_PATH=models\llm\mmproj-qwen3-vl-4b-instruct-q8_0.gguf"
 set "PORT=8080"
 set "HOST=127.0.0.1"
 set "NGL=99"
@@ -21,11 +21,11 @@ echo ====================================================================
 echo   GupkaCommander -- Запуск локального VLM сервера llama.cpp
 echo ====================================================================
 
-if not exist "%MODEL_PATH%" if exist "%LOCALAPPDATA%\GupkaCommander\models\llm\qwen2.5-vl-3b-instruct-q4_k_m.gguf" (
-    set "MODEL_PATH=%LOCALAPPDATA%\GupkaCommander\models\llm\qwen2.5-vl-3b-instruct-q4_k_m.gguf"
+if not exist "%MODEL_PATH%" if exist "%LOCALAPPDATA%\GupkaCommander\models\llm\qwen3-vl-4b-instruct-q4_k_m.gguf" (
+    set "MODEL_PATH=%LOCALAPPDATA%\GupkaCommander\models\llm\qwen3-vl-4b-instruct-q4_k_m.gguf"
 )
-if not exist "%MMPROJ_PATH%" if exist "%LOCALAPPDATA%\GupkaCommander\models\llm\qwen2.5-vl-3b-mmproj-f16.gguf" (
-    set "MMPROJ_PATH=%LOCALAPPDATA%\GupkaCommander\models\llm\qwen2.5-vl-3b-mmproj-f16.gguf"
+if not exist "%MMPROJ_PATH%" if exist "%LOCALAPPDATA%\GupkaCommander\models\llm\mmproj-qwen3-vl-4b-instruct-q8_0.gguf" (
+    set "MMPROJ_PATH=%LOCALAPPDATA%\GupkaCommander\models\llm\mmproj-qwen3-vl-4b-instruct-q8_0.gguf"
 )
 
 rem 1. Поиск исполняемого файла llama-server.exe

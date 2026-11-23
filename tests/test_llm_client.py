@@ -127,7 +127,7 @@ class TestGenerateResponse:
             assert res == "Привет! Чем я могу помочь?"
             mock_post.assert_called_once()
             called_kwargs = mock_post.call_args[1]
-            assert called_kwargs["json"]["model"] == "qwen2.5-vl-3b-instruct"
+            assert called_kwargs["json"]["model"] == "qwen3-vl-4b-instruct"
 
     def test_generate_response_offline_fallback(self, client: LocalLLMClient) -> None:
         """Проверка перехода на резервный движок при ошибке соединения."""

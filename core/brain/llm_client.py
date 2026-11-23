@@ -584,7 +584,7 @@ class LocalLLMClient:
     def __init__(
         self,
         api_base: str | None = None,
-        model_name: str = "qwen2.5-vl-3b-instruct",
+        model_name: str = "qwen3-vl-4b-instruct",
         timeout_seconds: float = 5.0,
         router: IntentRouter | None = None,
         session: requests.Session | None = None,

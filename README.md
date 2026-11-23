@@ -60,7 +60,7 @@ flowchart TD
 
     subgraph Маршрутизация["Интеллектуальное ядро"]
         C1{"Маршрутизатор намерений"}
-        C2["🧠 Локальная VLM (Qwen2.5-VL-3B Q4)"]
+        C2["🧠 Локальная VLM (Qwen3-VL-4B-Instruct Q4)"]
     end
 
     subgraph Исполнение["4-уровневая пирамида автоматизации"]
@@ -157,7 +157,7 @@ sequenceDiagram
 | **Tier 0: Fast-Path** | Windows Registry, `.lnk` парсер, `rapidfuzz`, Win32 API, `os.startfile` | Запуск Telegram, Chrome, терминала, переход на YouTube, регулировка звука | **< 20 мс** | **0 МБ** |
 | **Tier 1: Semantic UIA** | `uiautomation` (Microsoft UI Automation COM) | Клик по кнопкам в Блокноте, Проводнике, окнах настроек, ввод текста по ID | **~50–150 мс** | **0 МБ** |
 | **Tier 2: Browser Bridge** | Chrome DevTools Protocol (CDP) / Playwright | Заполнение веб-форм, поиск видео, клик по ссылкам на страницах | **~50–100 мс** | **0 МБ** |
-| **Tier 3: Vision Fallback** | `mss` + `Qwen2.5-VL-3B-Instruct` (Q4_K_M) + `pyautogui` | Сложные неразмеченные интерфейсы, видеоплееры, игры, нестандартный GUI | **~1–2 сек** | **~2.6 ГБ** |
+| **Tier 3: Vision Fallback** | `mss` + `Qwen3-VL-4B-Instruct` (Q4_K_M + mmproj Q8_0) + `pyautogui` | Сложные неразмеченные интерфейсы, видеоплееры, игры, нестандартный GUI | **~1–2 сек** | **~3.4 ГБ** |
 
 ---
 
@@ -173,7 +173,7 @@ sequenceDiagram
 | :--- | :--- | :--- |
 | **ОС Windows 11 + дисплеи** | GPU / RAM | ~800–1 000 МБ VRAM / ~6–7 ГБ RAM |
 | **Silero VAD + Faster-Whisper + Piper TTS** | CPU | **0 МБ VRAM** / ~350 МБ RAM |
-| **Qwen2.5-VL-3B-Instruct (Q4_K_M GGUF)** | GPU | **~2 500–2 800 МБ VRAM** / ~200 МБ RAM |
+| **Qwen3-VL-4B-Instruct (Q4_K_M + mmproj Q8_0)** | GPU | **~3 400–4 000 МБ VRAM** / ~250 МБ RAM |
 | **PySide6 GUI + Fast-Path кэш** | CPU / DWM | **0 МБ VRAM** / ~90 МБ RAM |
 | **Резерв видеопамяти под буферы** | GPU | **> 4 000 МБ VRAM (Свободно)** |
 

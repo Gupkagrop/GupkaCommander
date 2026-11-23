@@ -33,12 +33,12 @@ PIPER_CONFIG_URL = (
     "dmitri/medium/ru_RU-dmitri-medium.onnx.json"
 )
 VLM_MODEL_URL = (
-    "https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/"
-    "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"
+    "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/"
+    "Qwen3VL-4B-Instruct-Q4_K_M.gguf"
 )
 VLM_MMPROJ_URL = (
-    "https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/"
-    "mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf"
+    "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/"
+    "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
 )
 WHISPER_REPO_BASE = "https://huggingface.co/Systran/faster-whisper-base/resolve/main"
 WHISPER_FILES = ["model.bin", "config.json", "vocabulary.txt", "tokenizer.json"]
@@ -210,21 +210,21 @@ def download_faster_whisper(
 
 
 def download_vlm_models(models_dir: Path, force: bool = False) -> list[Path]:
-    """Загружает GGUF квантование Qwen2.5-VL-3B-Instruct и проектор для локального LLM-сервера."""
+    """Загружает GGUF квантование Qwen3-VL-4B-Instruct и проектор для локального LLM-сервера."""
     llm_dir = models_dir / "llm"
-    model_path = llm_dir / "qwen2.5-vl-3b-instruct-q4_k_m.gguf"
-    mmproj_path = llm_dir / "qwen2.5-vl-3b-mmproj-f16.gguf"
+    model_path = llm_dir / "qwen3-vl-4b-instruct-q4_k_m.gguf"
+    mmproj_path = llm_dir / "mmproj-qwen3-vl-4b-instruct-q8_0.gguf"
 
     download_file(
         VLM_MODEL_URL,
         model_path,
-        description="Qwen2.5-VL-3B-Instruct Q4_K_M (GGUF)",
+        description="Qwen3-VL-4B-Instruct Q4_K_M (GGUF)",
         force=force,
     )
     download_file(
         VLM_MMPROJ_URL,
         mmproj_path,
-        description="Qwen2.5-VL-3B Multimodal Projector F16 (GGUF)",
+        description="Qwen3-VL-4B Multimodal Projector Q8_0 (GGUF)",
         force=force,
     )
     return [model_path, mmproj_path]
@@ -264,7 +264,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--vlm-only",
         action="store_true",
-        help="Скачать только модели локального VLM (Qwen2.5-VL-3B GGUF).",
+        help="Скачать только модели локального VLM (Qwen3-VL-4B-Instruct GGUF).",
     )
     parser.add_argument(
         "--with-vlm",

@@ -51,13 +51,15 @@ WHISPER_FILES: tuple[str, ...] = (
     "tokenizer.json",
 )
 VLM_MODEL_URL = (
-    "https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/"
-    "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"
+    "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/"
+    "Qwen3VL-4B-Instruct-Q4_K_M.gguf"
 )
 VLM_MMPROJ_URL = (
-    "https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/"
-    "mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf"
+    "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/"
+    "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
 )
+VLM_MODEL_FILENAME = "qwen3-vl-4b-instruct-q4_k_m.gguf"
+VLM_MMPROJ_FILENAME = "mmproj-qwen3-vl-4b-instruct-q8_0.gguf"
 LLAMA_RELEASES_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5"
 
 BOOTSTRAP_STATE_FILE = "bootstrap_state.json"
@@ -285,8 +287,8 @@ class DependencyManager:
         piper_onnx = self.models_dir / "piper" / "ru_RU-dmitri-medium.onnx"
         piper_json = self.models_dir / "piper" / "ru_RU-dmitri-medium.onnx.json"
         whisper_dir = self.models_dir / "whisper"
-        vlm_model = self.models_dir / "llm" / "qwen2.5-vl-3b-instruct-q4_k_m.gguf"
-        vlm_mmproj = self.models_dir / "llm" / "qwen2.5-vl-3b-mmproj-f16.gguf"
+        vlm_model = self.models_dir / "llm" / VLM_MODEL_FILENAME
+        vlm_mmproj = self.models_dir / "llm" / VLM_MMPROJ_FILENAME
         llama_bin = self.find_llama_server()
 
         items = [
@@ -324,10 +326,10 @@ class DependencyManager:
             ),
             DependencyItem(
                 id="vlm_qwen",
-                name="Qwen2.5-VL-3B-Instruct (Q4_K_M + Vision)",
-                description="Локальный ИИ-мозг для диалога, планирования и экранного зрения.",
+                name="Qwen3-VL-4B-Instruct (Q4_K_M + Vision)",
+                description="Локальный ИИ-мозг для диалога, планирования и точного GUI-зрения.",
                 group=DependencyGroup.VLM,
-                approx_size_mb=3117.0,
+                approx_size_mb=2815.0,
                 required_for_default=False,
                 installed=(
                     _is_valid_file(vlm_model, MIN_VLM_BYTES)
@@ -338,7 +340,7 @@ class DependencyManager:
             DependencyItem(
                 id="llama_server",
                 name="Сервер инференса llama.cpp (Vulkan GPU)",
-                description="Исполняемый движок llama-server.exe для запуска Qwen2.5-VL.",
+                description="Исполняемый движок llama-server.exe для запуска Qwen3-VL-4B.",
                 group=DependencyGroup.RUNTIME,
                 approx_size_mb=37.0,
                 required_for_default=False,
@@ -440,14 +442,14 @@ class DependencyManager:
             return [
                 FileSpec(
                     url=VLM_MODEL_URL,
-                    relative_path="llm/qwen2.5-vl-3b-instruct-q4_k_m.gguf",
-                    label="Qwen2.5-VL-3B Q4_K_M",
+                    relative_path=f"llm/{VLM_MODEL_FILENAME}",
+                    label="Qwen3-VL-4B Q4_K_M",
                     min_bytes=MIN_VLM_BYTES,
                 ),
                 FileSpec(
                     url=VLM_MMPROJ_URL,
-                    relative_path="llm/qwen2.5-vl-3b-mmproj-f16.gguf",
-                    label="Qwen2.5-VL Projector F16",
+                    relative_path=f"llm/{VLM_MMPROJ_FILENAME}",
+                    label="Qwen3-VL-4B Projector Q8_0",
                     min_bytes=MIN_VLM_BYTES,
                 ),
             ]

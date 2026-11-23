@@ -42,7 +42,8 @@
   3. Отдельное окно системных настроек `SettingsDialog` (`gui/settings_dialog.py`) в стиле Fluent Dark с сохранением `config/settings.json` и разведением пунктов трея «Настройки...» и «Модели и зависимости...».
   4. Подавление ложных срабатываний Mouse Shake (`FailSafeMonitor.suppress_mouse_shake()`) на время синтетических движений курсора в `VisionAgent` при полном сохранении мгновенного прерывания по `Esc`.
   5. Изоляция сессий в `PiperSynthesizer` (`_session_id` + локальный `threading.Event` на сессию) для устранения гонок при быстром Barge-In.
-  Написано 7 новых тестов в `tests/test_ideal_polish.py` (всего **588 тестов**, 100% green, 0 ошибок ruff в 88 файлах и mypy strict в 80 файлах).
+  Написано 7 новых тестов в `tests/test_ideal_polish.py` (всего **588 тестов**, 100% green, 0 ошибок ruff в 88 файлах и mypy strict в 80 файлах). (Commit: `22f596a`, tag `v1.1.0`)
+- [x] **2026-11-23 Переход локального VLM на `Qwen3-VL-4B-Instruct` (`Q4_K_M` + `mmproj-Q8_0`, 2.81 ГБ):** Проведен сравнительный аудит компактных VLM-моделей (Qwen2.5-VL-3B vs Qwen3-VL-4B-Instruct vs Qwen3.5-4B vs Gemma 4 E4B vs Qwen3-VL-8B) с проверкой реальных размеров GGUF на HuggingFace API. Официальный `Qwen/Qwen3-VL-4B-Instruct-GGUF` (2381.6 МБ + 432.9 МБ = **2.81 ГБ**) легче `Qwen2.5-VL-3B` (3.12 ГБ), новее на поколение, точнее в GUI Grounding (DeepStack) и без задержки `<think>` для Streaming TTS. Обновлены `core/bootstrap.py`, `core/brain/llama_manager.py`, `core/brain/llm_client.py`, `config/settings.json`, `.env.example`, `scripts/download_models.py`, `scripts/run_llama_server.*`, `AGENTS.md`, `README.md` и тесты (588/588 green).
 
 ## 3. Active Task (Current Focus)
 - **Feature:** Все рекомендации аудита реализованы, протестированы и верифицированы — Golden Master **10.0 / 10** по контрольному аудиту Gemini 4 Argon.

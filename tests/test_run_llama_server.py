@@ -23,8 +23,8 @@ class TestRunLlamaServerScripts:
         assert ps1_file.exists(), "Скрипт run_llama_server.ps1 должен существовать"
 
         required_snippets = [
-            "qwen2.5-vl-3b-instruct-q4_k_m.gguf",
-            "qwen2.5-vl-3b-mmproj-f16.gguf",
+            "qwen3-vl-4b-instruct-q4_k_m.gguf",
+            "mmproj-qwen3-vl-4b-instruct-q8_0.gguf",
             "-ngl",
             "99",
             "8080",

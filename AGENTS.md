@@ -9,7 +9,7 @@
 - **Target Platform:** Windows 11 Desktop (GPU: NVIDIA RTX 5050 Laptop 8GB VRAM, CPU: Intel i5-14450HX, RAM: 16GB)
 - **Stack:** Python 3.12+ / PySide6 (Qt 6 Fluent UI) / Windows Win32 API & UI Automation (UIA)
 - **Voice Stack (CPU):** Silero VAD (ONNX) / Faster-Whisper INT8 (CTranslate2) / Piper TTS (ONNX)
-- **Cognitive Core (GPU):** 4-bit Quantized Local VLM/LLM (Qwen2.5-VL-3B / Qwen2.5-3B)
+- **Cognitive Core (GPU):** 4-bit Quantized Local VLM/LLM (Qwen3-VL-4B-Instruct Q4_K_M + mmproj Q8_0)
 - **Package Manager & Runtimes:** `uv` / Python 3.12+
 
 ## 2. Standard Commands (Harness Sensors)

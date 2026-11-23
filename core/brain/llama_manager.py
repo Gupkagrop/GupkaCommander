@@ -24,8 +24,8 @@ from core.paths import get_bin_dir, get_config_path, get_models_dir
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_FILENAME = "qwen2.5-vl-3b-instruct-q4_k_m.gguf"
-DEFAULT_MMPROJ_FILENAME = "qwen2.5-vl-3b-mmproj-f16.gguf"
+DEFAULT_MODEL_FILENAME = "qwen3-vl-4b-instruct-q4_k_m.gguf"
+DEFAULT_MMPROJ_FILENAME = "mmproj-qwen3-vl-4b-instruct-q8_0.gguf"
 
 
 class LlamaServerManager:
@@ -165,7 +165,7 @@ class LlamaServerManager:
         binary = self.find_binary()
         model, mmproj = self.find_model_paths()
         if binary is None or model is None:
-            logger.debug("llama-server.exe или веса Qwen2.5-VL не найдены — автозапуск пропущен.")
+            logger.debug("llama-server.exe или веса Qwen3-VL-4B не найдены — автозапуск пропущен.")
             return False
 
         cmd = self.build_command(binary, model, mmproj, n_gpu_layers, ctx_size)

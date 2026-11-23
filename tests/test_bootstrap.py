@@ -115,8 +115,8 @@ class TestDependencyManagerCore:
 
         llm_dir = models_dir / "llm"
         llm_dir.mkdir(parents=True)
-        (llm_dir / "qwen2.5-vl-3b-instruct-q4_k_m.gguf").write_bytes(b"0")
-        (llm_dir / "qwen2.5-vl-3b-mmproj-f16.gguf").write_bytes(b"0")
+        (llm_dir / "qwen3-vl-4b-instruct-q4_k_m.gguf").write_bytes(b"0")
+        (llm_dir / "mmproj-qwen3-vl-4b-instruct-q8_0.gguf").write_bytes(b"0")
         # Для VLM минимальный порог 100MB, подменяем порог проверкой через sparse/mock
         with patch("core.bootstrap.MIN_VLM_BYTES", 1):
             bin_dir.mkdir(parents=True, exist_ok=True)

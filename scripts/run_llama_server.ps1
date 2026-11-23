@@ -3,13 +3,13 @@
     GupkaCommander: Скрипт запуска локального инференс-сервера llama-server.exe.
 .DESCRIPTION
     Запускает OpenAI-совместимый HTTP сервер llama.cpp для мультимодальной модели
-    Qwen2.5-VL-3B-Instruct (GGUF Q4_K_M + mmproj F16) с выгрузкой всех слоев на GPU NVIDIA.
+    Qwen3-VL-4B-Instruct (GGUF Q4_K_M + mmproj Q8_0) с выгрузкой всех слоев на GPU NVIDIA.
 #>
 
 [CmdletBinding()]
 param(
-    [string]$ModelPath = "models\llm\qwen2.5-vl-3b-instruct-q4_k_m.gguf",
-    [string]$MmprojPath = "models\llm\qwen2.5-vl-3b-mmproj-f16.gguf",
+    [string]$ModelPath = "models\llm\qwen3-vl-4b-instruct-q4_k_m.gguf",
+    [string]$MmprojPath = "models\llm\mmproj-qwen3-vl-4b-instruct-q8_0.gguf",
     [int]$Port = 8080,
     [string]$HostAddress = "127.0.0.1",
     [int]$Ngl = 99,
