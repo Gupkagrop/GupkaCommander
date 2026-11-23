@@ -1,247 +1,260 @@
 """
 > [!NOTE]
-> Модуль gui.styles: Централизованная дизайн-система и стили Windows 11 Fluent Dark.
-> Предоставляет палитру цветов, CSS/QSS-тему для фреймворка PySide6 и утилиты стилизации.
+> Модуль gui.styles: Палитра цветов, таблица стилей QSS и русскоязычные бейджи
+> состояний для интерфейса GupkaCommander в стиле Windows 11 Fluent Dark Glass.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class FluentPalette:
-    """Цветовая палитра Windows 11 Fluent Dark."""
+    """Цветовая палитра интерфейса Windows 11 Fluent Dark."""
 
-    # Базовые поверхности и фон
-    background: str = "#1e1e1e"
+    background: str = "#1E1E1E"
     surface: str = "#252525"
-    surface_secondary: str = "#2d2d2d"
-    surface_hover: str = "#333333"
-    surface_pressed: str = "#2a2a2a"
-
-    # Границы и разделители
     border: str = "#333333"
-    border_subtle: str = "#3a3a3a"
-    border_focus: str = "#60cdff"
+    text: str = "#FFFFFF"
+    secondary: str = "#A0A0A0"
+    accent: str = "#60CDFF"
+    error: str = "#FF453A"
+    success: str = "#30D158"
+    warning: str = "#FFD60A"
 
-    # Текст и типографика
-    text: str = "#ffffff"
-    secondary: str = "#a0a0a0"
-    text_disabled: str = "#666666"
+    # Расширенные токены стеклянных поверхностей и карточек
+    surface_secondary: str = "#2D2D30"
+    surface_glass: str = "rgba(24, 24, 28, 242)"
+    surface_elevated: str = "rgba(40, 41, 48, 210)"
+    border_glass: str = "rgba(255, 255, 255, 0.11)"
+    border_subtle: str = "rgba(255, 255, 255, 0.07)"
+    divider: str = "rgba(255, 255, 255, 0.08)"
+    user_bubble_bg: str = "rgba(96, 205, 255, 0.14)"
+    user_bubble_border: str = "rgba(96, 205, 255, 0.28)"
+    assistant_card_bg: str = "rgba(38, 39, 46, 0.92)"
+    action_card_bg: str = "rgba(52, 44, 24, 0.72)"
+    action_card_border: str = "rgba(255, 214, 10, 0.25)"
 
-    # Акцентные и семантические цвета
-    accent: str = "#60cdff"
-    accent_hover: str = "#7ad5ff"
-    accent_pressed: str = "#45bceb"
-    error: str = "#ff453a"
-    success: str = "#30d158"
-    warning: str = "#f0ad4e"
 
-
-# Глобальный синглтон палитры
 PALETTE = FluentPalette()
 
+_STATUS_LABELS_RU: dict[str, str] = {
+    "IDLE": "Готов",
+    "LISTENING": "Слушаю",
+    "PROCESSING": "Думаю...",
+    "SPEAKING": "Говорю",
+    "MUTED": "Без звука",
+    "ERROR": "Ошибка",
+}
 
-FLUENT_DARK_THEME = f"""
-/* =========================================================================
-   GupkaCommander — Windows 11 Fluent Dark Theme
-   ========================================================================= */
 
-/* Базовые элементы окна */
-QWidget {{
-    background-color: {PALETTE.background};
-    color: {PALETTE.text};
-    font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif;
-    font-size: 13px;
-    selection-background-color: {PALETTE.accent};
-    selection-color: #000000;
-}}
+def get_status_label_ru(state: str) -> str:
+    """
+    Возвращает локализованную краткую подпись состояния конвейера для бейджа.
 
-/* Главная панель Spotlight */
-QFrame#spotlightBar {{
-    background-color: {PALETTE.surface};
-    border: 1px solid {PALETTE.border};
-    border-radius: 12px;
-}}
+    Args:
+        state: Строковое имя состояния (IDLE, LISTENING, PROCESSING, SPEAKING, MUTED, ERROR).
 
-/* Поле поискового ввода */
-QLineEdit#searchInput {{
-    background-color: transparent;
-    color: {PALETTE.text};
-    placeholder-text-color: {PALETTE.secondary};
-    border: none;
-    font-size: 15px;
-    padding: 6px 8px;
-    selection-background-color: {PALETTE.accent};
-    selection-color: #000000;
-}}
+    Returns:
+        Локализованная строка состояния на русском языке.
+    """
+    norm = state.strip().upper()
+    return _STATUS_LABELS_RU.get(norm, "Готов")
 
-QLineEdit#searchInput:focus {{
-    border: none;
-}}
 
-/* Кнопки */
-QPushButton {{
-    background-color: {PALETTE.surface_secondary};
-    color: {PALETTE.text};
-    border: 1px solid {PALETTE.border};
-    border-radius: 6px;
-    padding: 6px 14px;
-    font-weight: 500;
-}}
+def get_status_badge_qss(state: str) -> str:
+    """
+    Генерирует QSS-стиль пилюли-индикатора состояния для #statusBadge.
 
-QPushButton:hover {{
-    background-color: {PALETTE.surface_hover};
-    border-color: {PALETTE.border_subtle};
-}}
+    Args:
+        state: Состояние голосового конвейера или интерфейса.
 
-QPushButton:pressed {{
-    background-color: {PALETTE.surface_pressed};
-}}
+    Returns:
+        Строка QSS для применения к виджету #statusBadge.
+    """
+    norm = state.strip().upper()
+    if norm == "LISTENING":
+        fg = PALETTE.accent
+        bg = "rgba(96, 205, 255, 0.16)"
+        border = "rgba(96, 205, 255, 0.42)"
+    elif norm == "SPEAKING":
+        fg = PALETTE.success
+        bg = "rgba(48, 209, 88, 0.16)"
+        border = "rgba(48, 209, 88, 0.42)"
+    elif norm == "PROCESSING":
+        fg = PALETTE.warning
+        bg = "rgba(255, 214, 10, 0.16)"
+        border = "rgba(255, 214, 10, 0.40)"
+    elif norm in ("ERROR", "MUTED"):
+        fg = PALETTE.error
+        bg = "rgba(255, 69, 58, 0.16)"
+        border = "rgba(255, 69, 58, 0.42)"
+    else:
+        fg = PALETTE.secondary
+        bg = "rgba(255, 255, 255, 0.06)"
+        border = "rgba(255, 255, 255, 0.11)"
 
-QPushButton:disabled {{
-    background-color: {PALETTE.background};
-    color: {PALETTE.text_disabled};
-    border-color: {PALETTE.border};
-}}
-
-QPushButton#accentButton {{
-    background-color: {PALETTE.accent};
-    color: #000000;
-    border: none;
-    font-weight: 600;
-}}
-
-QPushButton#accentButton:hover {{
-    background-color: {PALETTE.accent_hover};
-}}
-
-QPushButton#accentButton:pressed {{
-    background-color: {PALETTE.accent_pressed};
-}}
-
-/* Статусные бейджи */
-QLabel#statusBadge {{
-    background-color: {PALETTE.surface_secondary};
-    color: {PALETTE.secondary};
-    border: 1px solid {PALETTE.border};
-    border-radius: 10px;
-    padding: 2px 8px;
-    font-size: 11px;
-    font-weight: 600;
-}}
-
-/* Полосы прокрутки */
-QScrollArea {{
-    background-color: transparent;
-    border: none;
-}}
-
-QScrollBar:vertical {{
-    background-color: transparent;
-    width: 6px;
-    margin: 0px;
-}}
-
-QScrollBar::handle:vertical {{
-    background-color: {PALETTE.border_subtle};
-    border-radius: 3px;
-    min-height: 24px;
-}}
-
-QScrollBar::handle:vertical:hover {{
-    background-color: {PALETTE.secondary};
-}}
-
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-    height: 0px;
-    background: none;
-}}
-
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-    background: none;
-}}
-
-/* Всплывающие подсказки */
-QToolTip {{
-    background-color: {PALETTE.surface};
-    color: {PALETTE.text};
-    border: 1px solid {PALETTE.border};
-    border-radius: 6px;
-    padding: 4px 8px;
-    font-size: 12px;
-}}
-
-/* Контекстные меню */
-QMenu {{
-    background-color: {PALETTE.surface};
-    color: {PALETTE.text};
-    border: 1px solid {PALETTE.border};
-    border-radius: 8px;
-    padding: 4px;
-}}
-
-QMenu::item {{
-    padding: 6px 20px 6px 28px;
-    border-radius: 4px;
-}}
-
-QMenu::item:selected {{
-    background-color: {PALETTE.surface_hover};
-    color: {PALETTE.text};
-}}
-
-QMenu::separator {{
-    height: 1px;
-    background-color: {PALETTE.border};
-    margin: 4px 8px;
-}}
-"""
+    return (
+        "QLabel#statusBadge {"
+        f"  color: {fg};"
+        f"  background-color: {bg};"
+        f"  border: 1px solid {border};"
+        "  border-radius: 12px;"
+        "  padding: 4px 11px;"
+        "  font-family: 'Segoe UI', 'Inter', sans-serif;"
+        "  font-size: 11px;"
+        "  font-weight: 600;"
+        "}"
+    )
 
 
 def get_fluent_stylesheet() -> str:
     """
-    Возвращает единую таблицу стилей QSS для темы Fluent Dark.
+    Формирует основную таблицу стилей QSS для плавающего окна SpotlightBar и ChatDrawer.
 
     Returns:
-        str: Полная таблица стилей Qt Style Sheet.
+        Полный QSS шаблон в стиле Windows 11 Fluent Dark Glass.
     """
-    return FLUENT_DARK_THEME
+    return f"""
+    QWidget {{
+        font-family: 'Segoe UI', 'Inter', sans-serif;
+        color: {PALETTE.text};
+    }}
 
+    QFrame#spotlightBar {{
+        background-color: {PALETTE.surface_glass};
+        border: 1px solid {PALETTE.border_glass};
+        border-radius: 18px;
+    }}
 
-def get_status_badge_qss(status: str) -> str:
+    QLineEdit#searchInput {{
+        background-color: transparent;
+        border: none;
+        color: {PALETTE.text};
+        font-size: 15px;
+        font-weight: 400;
+        padding: 6px 4px;
+        selection-background-color: rgba(96, 205, 255, 0.35);
+        selection-color: {PALETTE.text};
+    }}
+
+    QFrame#drawerDivider {{
+        background-color: {PALETTE.divider};
+        border: none;
+        min-height: 1px;
+        max-height: 1px;
+    }}
+
+    QLabel#statusBadge {{
+        color: {PALETTE.secondary};
+        background-color: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.11);
+        border-radius: 12px;
+        padding: 4px 11px;
+        font-size: 11px;
+        font-weight: 600;
+    }}
+
+    QPushButton#toggleDrawerBtn,
+    QPushButton#actionIconBtn {{
+        background-color: rgba(255, 255, 255, 0.04);
+        border: 1px solid transparent;
+        border-radius: 10px;
+        padding: 0px;
+    }}
+
+    QPushButton#toggleDrawerBtn:hover,
+    QPushButton#actionIconBtn:hover {{
+        background-color: rgba(255, 255, 255, 0.10);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+    }}
+
+    QPushButton#toggleDrawerBtn:pressed,
+    QPushButton#actionIconBtn:pressed {{
+        background-color: rgba(255, 255, 255, 0.16);
+    }}
+
+    QPushButton#actionIconBtn[muted="true"] {{
+        background-color: rgba(255, 69, 58, 0.15);
+        border: 1px solid rgba(255, 69, 58, 0.38);
+    }}
+
+    QPushButton#actionIconBtn[muted="true"]:hover {{
+        background-color: rgba(255, 69, 58, 0.24);
+    }}
+
+    QWidget#chatDrawer,
+    QScrollArea,
+    QScrollArea > QWidget > QWidget {{
+        background-color: transparent;
+        border: none;
+    }}
+
+    QScrollBar:vertical {{
+        background: transparent;
+        width: 5px;
+        margin: 6px 2px 6px 0px;
+    }}
+
+    QScrollBar::handle:vertical {{
+        background: rgba(255, 255, 255, 0.18);
+        border-radius: 2px;
+        min-height: 28px;
+    }}
+
+    QScrollBar::handle:vertical:hover {{
+        background: rgba(96, 205, 255, 0.55);
+    }}
+
+    QScrollBar::add-line:vertical,
+    QScrollBar::sub-line:vertical,
+    QScrollBar::add-page:vertical,
+    QScrollBar::sub-page:vertical {{
+        background: transparent;
+        height: 0px;
+    }}
+
+    QFrame#messageCard {{
+        background-color: {PALETTE.assistant_card_bg};
+        border: 1px solid {PALETTE.border_subtle};
+        border-radius: 14px;
+    }}
+
+    QFrame#messageCard[role="user"] {{
+        background-color: {PALETTE.user_bubble_bg};
+        border: 1px solid {PALETTE.user_bubble_border};
+        border-radius: 14px;
+    }}
+
+    QFrame#messageCard[role="action"] {{
+        background-color: {PALETTE.action_card_bg};
+        border: 1px solid {PALETTE.action_card_border};
+        border-radius: 12px;
+    }}
+
+    QLabel#cardRoleLabel {{
+        font-size: 11px;
+        font-weight: 600;
+        color: {PALETTE.secondary};
+    }}
+
+    QLabel#cardTextLabel {{
+        font-size: 13px;
+        font-weight: 400;
+        color: {PALETTE.text};
+        line-height: 1.4;
+    }}
+
+    QLabel#cardStatusBadge {{
+        font-size: 10px;
+        font-weight: 600;
+        border-radius: 8px;
+        padding: 2px 8px;
+        background-color: rgba(255, 255, 255, 0.08);
+        color: {PALETTE.secondary};
+    }}
     """
-    Возвращает специфический QSS для бейджа статуса конвейера.
 
-    Args:
-        status: Текстовый статус ('IDLE', 'LISTENING', 'PROCESSING', 'SPEAKING', 'ERROR').
 
-    Returns:
-        str: Строка стилей QSS для QLabel.
-    """
-    normalized = status.strip().upper()
-
-    if normalized == "LISTENING":
-        color = PALETTE.accent
-        bg = "rgba(96, 205, 255, 0.15)"
-    elif normalized == "PROCESSING":
-        color = PALETTE.warning
-        bg = "rgba(240, 173, 78, 0.15)"
-    elif normalized == "SPEAKING":
-        color = PALETTE.success
-        bg = "rgba(48, 209, 88, 0.15)"
-    elif normalized in ("ERROR", "FAILED"):
-        color = PALETTE.error
-        bg = "rgba(255, 69, 58, 0.15)"
-    else:
-        color = PALETTE.secondary
-        bg = PALETTE.surface_secondary
-
-    return (
-        f"background-color: {bg}; "
-        f"color: {color}; "
-        f"border: 1px solid {color}; "
-        f"border-radius: 10px; "
-        f"padding: 2px 8px; "
-        f"font-size: 11px; "
-        f"font-weight: 600;"
-    )
+FLUENT_DARK_THEME: str = get_fluent_stylesheet()

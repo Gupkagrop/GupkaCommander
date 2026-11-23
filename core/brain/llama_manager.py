@@ -135,6 +135,9 @@ class LlamaServerManager:
             self.host,
             "--ctx-size",
             str(ctx_size),
+            "--image-min-tokens",
+            "1024",
+            "--jinja",
         ]
         if mmproj is not None:
             cmd.extend(["--mmproj", str(mmproj)])

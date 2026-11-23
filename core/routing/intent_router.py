@@ -324,10 +324,10 @@ class IntentRouter:
                 matched_rule="memory_delete_note",
             )
 
-        # 3. Просмотр заметок: «покажи мои заметки», «прочитай заметки», «список заметок»
+        # 3. Просмотр заметок: «покажи/открой/прочитай мои заметки», «список заметок»
         list_notes_pat = (
             r"^(?:покажи(?:\s+мои)?\s+заметки|прочитай(?:\s+мои)?\s+заметки|"
-            r"список\s+заметок|мои\s+заметки|все\s+заметки)$"
+            r"открой(?:\s+мои)?\s+заметки|список\s+заметок|мои\s+заметки|все\s+заметки)$"
         )
         if re.search(list_notes_pat, lower_query):
             return RouteResult(
@@ -837,6 +837,36 @@ class IntentRouter:
         # Исключаем попадание веб-алиасов в запуск приложений
         if cand_lower in self.web_aliases and cand_lower not in self.app_aliases:
             return None
+
+        # Если фраза не является точным алиасом приложения и содержит медиа/веб/креативные маркеры
+        # либо слишком длинная (> 3 слов), передаём её дальше в AI-агента
+        if cand_lower not in self.app_aliases:
+            media_web_markers = (
+                "видео",
+                "ролик",
+                "фильм",
+                "музык",
+                "песн",
+                "клип",
+                "ютуб",
+                "youtube",
+                "браузер",
+                "интернет",
+                "гугл",
+                "яндекс",
+                "вкус",
+                "что-нибудь",
+                "что нибудь",
+                "какое-нибудь",
+                "какое нибудь",
+                "какой-нибудь",
+                "какой нибудь",
+                "про ",
+            )
+            if any(marker in cand_lower for marker in media_web_markers):
+                return None
+            if len(cand_lower.split()) > 3:
+                return None
 
         resolved_name = self._resolve_app_alias(candidate)
         return RouteResult(

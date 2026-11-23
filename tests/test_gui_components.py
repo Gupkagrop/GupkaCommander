@@ -349,7 +349,8 @@ class TestSpotlightBarHeadless:
         """Проверка трансляции состояния и уровня амплитуды во внутренние виджеты."""
         spotlight_bar.set_pipeline_state(PipelineState.SPEAKING)
         assert spotlight_bar.waveform.get_state() == "SPEAKING"
-        assert spotlight_bar._status_badge.text() == "SPEAKING"
+        assert spotlight_bar.pipeline_state == "SPEAKING"
+        assert spotlight_bar._status_badge.text() == "Говорю"
 
         spotlight_bar.set_audio_level(0.85)
         assert spotlight_bar.waveform._target_level == 0.85

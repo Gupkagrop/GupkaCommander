@@ -6,6 +6,7 @@
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
@@ -80,6 +81,8 @@ class VoicePipeline:
         on_transcription: Callable[[str], None] | None = None,
         on_speech_end: Callable[[], None] | None = None,
         on_audio_level: Callable[[float], None] | None = None,
+        echo_guard: bool = False,
+        echo_tail_seconds: float = 0.45,
     ) -> None:
         """Инициализация голосового конвейера с внедрением зависимостей."""
         self._audio_capture = audio_capture
@@ -90,6 +93,9 @@ class VoicePipeline:
         self.silence_duration_ms = silence_duration_ms
         self.sample_rate = sample_rate
         self.chunk_size = chunk_size
+        self._echo_guard = echo_guard
+        self._echo_tail_seconds = max(0.0, echo_tail_seconds)
+        self._echo_guard_until: float = 0.0
 
         self.on_state_changed = on_state_changed
         self.on_speech_start = on_speech_start
@@ -258,12 +264,45 @@ class VoicePipeline:
 
     def speak(self, text: str, blocking: bool = False) -> None:
         """Воспроизведение речи через PiperSynthesizer."""
+        if self._echo_guard:
+            self._echo_guard_until = max(
+                self._echo_guard_until,
+                time.monotonic() + self._echo_tail_seconds,
+            )
         self._set_state(PipelineState.SPEAKING)
         try:
             self.synthesizer.speak(text, blocking=blocking)
         finally:
+            if self._echo_guard:
+                self._echo_guard_until = max(
+                    self._echo_guard_until,
+                    time.monotonic() + self._echo_tail_seconds,
+                )
             if blocking or not self.synthesizer.is_speaking():
                 self._set_state(PipelineState.IDLE)
+
+    def _is_echo_suppressed(self) -> bool:
+        """Проверяет, подавлен ли вход микрофона из-за речи ассистента и хвоста эха."""
+        if not self._echo_guard:
+            return False
+
+        now = time.monotonic()
+        synth = self._synthesizer
+        is_speaking = False
+        if synth is not None:
+            try:
+                is_speaking = bool(synth.is_speaking())
+            except Exception:
+                is_speaking = False
+
+        if is_speaking or self.state == PipelineState.SPEAKING:
+            self._echo_guard_until = max(
+                self._echo_guard_until,
+                now + self._echo_tail_seconds,
+            )
+            return True
+
+        return now < self._echo_guard_until
 
     def _handle_barge_in_if_speaking(self) -> None:
         """Немедленное прерывание воспроизведения речи при начале речи пользователя."""
@@ -336,7 +375,7 @@ class VoicePipeline:
             with self._state_lock:
                 muted = self._is_muted
 
-            if muted:
+            if muted or self._is_echo_suppressed():
                 if self.on_audio_level is not None:
                     self._safe_invoke(self.on_audio_level, 0.0)
                 if is_speech_active:
@@ -347,7 +386,8 @@ class VoicePipeline:
                         self.vad_detector.reset_states()
                     except Exception:
                         pass
-                    self._set_state(PipelineState.IDLE)
+                    if self.state == PipelineState.LISTENING:
+                        self._set_state(PipelineState.IDLE)
                 continue
 
             if self.on_audio_level is not None:

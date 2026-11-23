@@ -18,6 +18,8 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable, Iterator
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -30,7 +32,7 @@ from core.brain.llm_client import LocalLLMClient
 from core.failsafe import FailSafeMonitor, get_failsafe_monitor
 from core.memory import MemoryManager
 from core.os_controller import DangerousCommandError, OSController
-from core.paths import get_database_path, get_icon_path
+from core.paths import get_database_path, get_icon_path, get_logs_dir
 from core.routing.intent_router import Intent, IntentRouter, RouteResult
 from core.uia import UIAutomationManager
 from core.vision.vision_agent import ActionFailedError, VisionAgent
@@ -40,11 +42,42 @@ from gui.hotkey_manager import HotkeyManager
 from gui.spotlight_bar import SpotlightBar
 from gui.tray_icon import TrayManager
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] (%(name)s) %(message)s",
-)
 logger = logging.getLogger("gupka.main")
+
+
+def setup_logging(log_level: int = logging.INFO) -> Path:
+    """Настраивает ротируемое файловое логирование и консольный вывод (при наличии stderr)."""
+    log_file = get_logs_dir() / "gupka.log"
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] (%(name)s) %(message)s")
+
+    has_file_handler = any(
+        isinstance(h, RotatingFileHandler) and Path(getattr(h, "baseFilename", "")) == log_file
+        for h in root_logger.handlers
+    )
+    if not has_file_handler:
+        file_handler = RotatingFileHandler(
+            log_file,
+            maxBytes=2 * 1024 * 1024,
+            backupCount=3,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+
+    if sys.stderr is not None:
+        has_stream_handler = any(
+            isinstance(h, logging.StreamHandler) and not isinstance(h, RotatingFileHandler)
+            for h in root_logger.handlers
+        )
+        if not has_stream_handler:
+            stream_handler = logging.StreamHandler(sys.stderr)
+            stream_handler.setFormatter(formatter)
+            root_logger.addHandler(stream_handler)
+
+    return log_file
 
 
 class VoiceBridge(QObject):
@@ -174,12 +207,13 @@ class GupkaCommanderApp(QObject):
         self._execution_lock: threading.Lock = threading.Lock()
         self.voice_bridge = VoiceBridge()
 
-        # 3. Голосовой конвейер
+        # 3. Голосовой конвейер (с подавлением акустического эха при воспроизведении TTS)
         self.enable_voice = enable_voice
         self.voice_pipeline = voice_pipeline or VoicePipeline(
             on_transcription=self._on_voice_transcription,
             on_state_changed=self._on_voice_state_changed,
             on_audio_level=self._on_audio_level,
+            echo_guard=True,
         )
 
         # 4. Пользовательский интерфейс (GUI)
@@ -210,8 +244,12 @@ class GupkaCommanderApp(QObject):
         self.voice_bridge.stream_chunk_received.connect(self._ui_on_stream_chunk)
         self.voice_bridge.stream_card_finished.connect(self._ui_finish_stream_card)
 
-        # SpotlightBar -> Выполнение команд
+        # SpotlightBar -> Выполнение команд и быстрые действия панели
         self.spotlight_bar.command_submitted.connect(self._handle_submitted_command)
+        if hasattr(self.spotlight_bar, "mute_toggled_requested"):
+            self.spotlight_bar.mute_toggled_requested.connect(self._on_spotlight_mute_toggled)
+        if hasattr(self.spotlight_bar, "settings_requested"):
+            self.spotlight_bar.settings_requested.connect(self.open_settings_dialog)
 
         # Горячие клавиши -> Видимость SpotlightBar
         self.hotkey_manager.hotkey_pressed.connect(self.spotlight_bar.toggle_visibility)
@@ -346,6 +384,25 @@ class GupkaCommanderApp(QObject):
             self._is_executing_command = True
 
         try:
+            # Прерываем активное озвучивание предыдущего ответа при поступлении новой команды
+            try:
+                vp = self.voice_pipeline
+                synth = getattr(vp, "_synthesizer", None)
+                if (
+                    synth is None
+                    and hasattr(vp, "synthesizer")
+                    and type(vp).__name__ != "VoicePipeline"
+                ):
+                    synth = getattr(vp, "synthesizer", None)
+                if (
+                    synth is not None
+                    and hasattr(synth, "is_speaking")
+                    and synth.is_speaking() is True
+                ):
+                    synth.stop()
+            except Exception as exc:
+                logger.debug("Ошибка остановки синтезатора перед новой командой: %s", exc)
+
             # Сброс флага аварийного прерывания FailSafe перед запуском команды
             try:
                 self.failsafe_monitor.reset_abort()
@@ -451,7 +508,7 @@ class GupkaCommanderApp(QObject):
             return self._handle_run_command(active_route, text)
 
         if active_route.intent == Intent.OPEN_APP:
-            return self._handle_open_app(active_route)
+            return self._handle_open_app(active_route, text)
 
         if active_route.intent == Intent.VISION_INTERACT:
             return self._handle_vision_interact(active_route, text)
@@ -611,8 +668,8 @@ class GupkaCommanderApp(QObject):
             return f"Команда выполнена: {preview}"
         return f"Команда завершилась с ошибкой: {stderr.strip()[:100]}"
 
-    def _handle_open_app(self, route: RouteResult) -> str:
-        """Обработка запуска установленных приложений через AppFinder."""
+    def _handle_open_app(self, route: RouteResult, raw_text: str = "") -> str:
+        """Обработка запуска установленных приложений через AppFinder с fallback к AI."""
         target = str(route.target or route.params.get("app", ""))
         found_apps = self.app_finder.find(target, threshold=60.0)
         if not found_apps and "raw_target" in route.params:
@@ -624,6 +681,15 @@ class GupkaCommanderApp(QObject):
             if success:
                 return f"Запущено приложение: {best_app.name}"
             return f"Не удалось запустить приложение: {best_app.name}"
+
+        if self.llm_client.is_healthy():
+            query_for_llm = raw_text.strip() or route.query.strip() or target
+            logger.info(
+                "Приложение '%s' не найдено, передача запроса когнитивному ядру: %s",
+                target,
+                query_for_llm,
+            )
+            return self._handle_ai_cognitive(query_for_llm)
 
         return f"Приложение '{target}' не найдено на устройстве."
 
@@ -873,7 +939,12 @@ class GupkaCommanderApp(QObject):
             memory_ctx = self.memory_manager.format_system_prompt_context()
             if memory_ctx:
                 base_planner = (
-                    "Ты планировщик действий операционной системы. Выбирай подходящие инструменты."
+                    "Ты голосовой ассистент и планировщик действий ОС Windows. "
+                    "Всегда выбирай подходящий инструмент (function calling), когда пользователь "
+                    "просит выполнить действие на компьютере или в интернете. "
+                    "Если пользователь просит включить, найти или открыть видео/музыку на YouTube "
+                    "(включая 'открой прикольное видео на ютуб на свой вкус'), обязательно вызывай "
+                    "search_web с engine='youtube' и конкретным интересным поисковым запросом."
                 )
                 planner_sys = f"{base_planner}\n\n{memory_ctx}"
                 actions = self.llm_client.plan_actions(text, system_prompt=planner_sys)
@@ -1077,6 +1148,13 @@ class GupkaCommanderApp(QObject):
             logger.error("Не удалось запустить приложение '%s': %s", app_path, exc)
             return False
 
+    def _on_spotlight_mute_toggled(self, muted: bool) -> None:
+        """Синхронизирует нажатие кнопки микрофона в SpotlightBar с системным треем."""
+        if self.tray_manager.is_muted() != muted:
+            self.tray_manager.set_muted(muted)
+            return
+        self.handle_mute_toggled(muted)
+
     def handle_mute_toggled(self, muted: bool) -> None:
         """
         Обработка отключения или включения микрофона.
@@ -1085,6 +1163,11 @@ class GupkaCommanderApp(QObject):
             muted: True, если микрофон отключен.
         """
         logger.info("Состояние микрофона изменено: muted=%s", muted)
+        if hasattr(self.spotlight_bar, "set_muted"):
+            try:
+                self.spotlight_bar.set_muted(muted)
+            except Exception as exc:
+                logger.debug("Ошибка синхронизации состояния микрофона в SpotlightBar: %s", exc)
         try:
             if hasattr(self.voice_pipeline, "set_muted"):
                 self.voice_pipeline.set_muted(muted)
@@ -1256,10 +1339,12 @@ def parse_arguments() -> argparse.Namespace:
 
 def main() -> int:
     """Точка входа запуска приложения GupkaCommander."""
-    # 0. Инициализация Per-Monitor DPI Awareness до создания контекста Qt
+    # 0. Инициализация Per-Monitor DPI Awareness и файлового логирования
     from core.vision.screen_capture import set_dpi_awareness
 
     set_dpi_awareness()
+    log_path = setup_logging()
+    logger.info("Запуск GupkaCommander. Лог-файл: %s", log_path)
 
     args = parse_arguments()
 

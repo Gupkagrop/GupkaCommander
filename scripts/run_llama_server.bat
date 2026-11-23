@@ -83,7 +83,7 @@ echo   Слои GPU:  %NGL%
 echo   Контекст:  %CTX_SIZE% токенов
 echo.
 
-"%LLAMA_BIN%" --model "%MODEL_PATH%" --mmproj "%MMPROJ_PATH%" -ngl %NGL% --port %PORT% --host %HOST% --ctx-size %CTX_SIZE%
+"%LLAMA_BIN%" --model "%MODEL_PATH%" --mmproj "%MMPROJ_PATH%" -ngl %NGL% --port %PORT% --host %HOST% --ctx-size %CTX_SIZE% --image-min-tokens 1024 --jinja
 
 if errorlevel 1 (
     echo.

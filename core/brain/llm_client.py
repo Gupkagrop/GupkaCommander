@@ -585,7 +585,7 @@ class LocalLLMClient:
         self,
         api_base: str | None = None,
         model_name: str = "qwen3-vl-4b-instruct",
-        timeout_seconds: float = 5.0,
+        timeout_seconds: float = 30.0,
         router: IntentRouter | None = None,
         session: requests.Session | None = None,
     ) -> None:
@@ -612,7 +612,7 @@ class LocalLLMClient:
         """Проверка доступности локального инференс-сервера."""
         try:
             url = f"{self.api_base}/models"
-            resp = self.session.get(url, timeout=min(2.0, self.timeout_seconds))
+            resp = self.session.get(url, timeout=min(1.5, self.timeout_seconds))
             return resp.status_code == 200
         except requests.RequestException:
             return False
@@ -775,7 +775,12 @@ class LocalLLMClient:
             user_content = prompt
 
         sys_prompt = system_prompt or (
-            "Ты планировщик действий операционной системы. Выбирай подходящие инструменты."
+            "Ты голосовой ассистент и планировщик действий ОС Windows. "
+            "Всегда выбирай подходящий инструмент (function calling), когда пользователь "
+            "просит выполнить действие на компьютере или в интернете. "
+            "Если пользователь просит включить, найти или открыть видео/музыку на YouTube "
+            "(включая 'открой прикольное видео на ютуб на свой вкус'), обязательно вызывай "
+            "search_web с engine='youtube' и конкретным интересным поисковым запросом."
         )
 
         payload: dict[str, Any] = {

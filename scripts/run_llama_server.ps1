@@ -92,7 +92,9 @@ $ArgsList = @(
     "-ngl", $Ngl,
     "--port", $Port,
     "--host", $HostAddress,
-    "--ctx-size", $CtxSize
+    "--ctx-size", $CtxSize,
+    "--image-min-tokens", "1024",
+    "--jinja"
 )
 
 & $LlamaBin @ArgsList

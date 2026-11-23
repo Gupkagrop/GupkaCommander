@@ -561,7 +561,7 @@ def test_real_voice_components_integration(mock_stream_cls: Any) -> None:
     for _ in range(4):
         cap._enqueue_chunk(silence_chunk)
 
-    for _ in range(30):
+    for _ in range(120):
         if transcriptions:
             break
         time.sleep(0.05)

@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import winreg
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -17,6 +18,29 @@ _EXCLUDED_SHORTCUT_KEYWORDS: tuple[str, ...] = (
     "help",
     "readme",
 )
+
+# Встроенные системные утилиты Windows, которые могут отсутствовать в реестре/Пуске как ярлыки
+_BUILTIN_WINDOWS_APPS: dict[str, str] = {
+    "notepad": "notepad.exe",
+    "notepad.exe": "notepad.exe",
+    "calc": "calc.exe",
+    "calculator": "calc.exe",
+    "calc.exe": "calc.exe",
+    "mspaint": "mspaint.exe",
+    "paint": "mspaint.exe",
+    "mspaint.exe": "mspaint.exe",
+    "explorer": "explorer.exe",
+    "explorer.exe": "explorer.exe",
+    "cmd": "cmd.exe",
+    "cmd.exe": "cmd.exe",
+    "powershell": "powershell.exe",
+    "powershell.exe": "powershell.exe",
+    "wt": "wt.exe",
+    "taskmgr": "taskmgr.exe",
+    "control": "control.exe",
+    "regedit": "regedit.exe",
+    "snippingtool": "snippingtool.exe",
+}
 
 
 @dataclass
@@ -351,10 +375,56 @@ class AppFinder:
         return list(self._apps)
 
     def _compute_similarity(self, query_text: str, target_text: str) -> float:
-        """Оценивает схожесть строк через комбинацию алгоритмов rapidfuzz."""
+        """Оценивает схожесть строк через точные и токен-ориентированные алгоритмы rapidfuzz."""
+        if query_text == target_text:
+            return 100.0
+
         s1 = float(fuzz.token_sort_ratio(query_text, target_text))
-        s2 = float(fuzz.partial_ratio(query_text, target_text))
-        return max(s1, s2)
+        s2 = float(fuzz.token_set_ratio(query_text, target_text))
+        best = max(s1, s2)
+
+        # Полное вхождение запроса как подстроки (защита от ложных совпадений коротких фрагментов)
+        if len(query_text) >= 4 and query_text in target_text:
+            best = max(best, min(95.0, 80.0 + float(len(query_text))))
+
+        # Сравнение по отдельным словам только при высокой уверенности (отсекает notes != notepad)
+        for token in target_text.split():
+            tok_ratio = float(fuzz.ratio(query_text, token))
+            if tok_ratio >= 75.0:
+                best = max(best, tok_ratio)
+
+        return best
+
+    def _find_exact_app(self, original_query: str, resolved_query: str) -> list[AppInfo]:
+        """Возвращает приложения с точным совпадением по имени или отдельному слову."""
+        candidates = {original_query.lower(), resolved_query.lower()}
+        exact_matches: list[AppInfo] = []
+        token_matches: list[AppInfo] = []
+
+        for app in self._apps:
+            name_lower = app.name.strip().lower()
+            stem_lower = Path(app.path).stem.lower() if app.path else ""
+            if name_lower in candidates or stem_lower in candidates:
+                exact_matches.append(app)
+                continue
+            name_tokens = set(name_lower.split())
+            if any(cand in name_tokens for cand in candidates):
+                token_matches.append(app)
+
+        if exact_matches:
+            return exact_matches
+        if token_matches:
+            return token_matches
+        return []
+
+    def _find_builtin_app(self, original_query: str, resolved_query: str) -> list[AppInfo]:
+        """Возвращает встроенную утилиту Windows, если алиас или запрос указывает на неё."""
+        for candidate in (resolved_query.lower(), original_query.lower()):
+            exe_name = _BUILTIN_WINDOWS_APPS.get(candidate)
+            if exe_name:
+                resolved_path = shutil.which(exe_name) or exe_name
+                return [AppInfo(name=resolved_query, path=resolved_path, source="builtin")]
+        return []
 
     def _score_apps(
         self, original_query: str, resolved_query: str, threshold: float
@@ -395,6 +465,14 @@ class AppFinder:
             self.scan(force=False)
 
         resolved_query = self.resolve_alias(clean_query)
+        exact_apps = self._find_exact_app(clean_query, resolved_query)
+        if exact_apps:
+            return exact_apps
+
+        builtin_apps = self._find_builtin_app(clean_query, resolved_query)
+        if builtin_apps:
+            return builtin_apps
+
         scored = self._score_apps(clean_query, resolved_query, threshold)
         if scored:
             scored.sort(key=lambda item: item[1], reverse=True)

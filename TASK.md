@@ -5,9 +5,9 @@
 > Обновляется агентом в конце каждого выполненного этапа или задачи (Stage 4 SOP).
 
 ## 1. Project Health & Stage
-- **Current Phase:** Phase 9: Идеальная полировка по рекомендациям Argon (Async QThread UI, LlamaServerManager, SettingsDialog, FailSafe & TTS Hardening)
-- **Status:** Production-Grade Release (588/588 Tests Green, 0 Ruff in 88 files, 0 Mypy Strict in 80 files)
-- **Last Updated:** 2026-11-23 20:08
+- **Current Phase:** Phase 10: Исправления по итогам живого тестирования (Эхо-защита TTS, маршрутизация YouTube/AppFinder, ротируемый лог, редизайн Fluent Glass UI)
+- **Status:** Production-Grade Release (597/597 Tests Green, 0 Ruff in 89 files, 0 Mypy Strict in 81 files)
+- **Last Updated:** 2026-11-23 22:47
 - **Active Branch:** `main`
 
 ## 2. Completed Milestones
@@ -44,11 +44,17 @@
   5. Изоляция сессий в `PiperSynthesizer` (`_session_id` + локальный `threading.Event` на сессию) для устранения гонок при быстром Barge-In.
   Написано 7 новых тестов в `tests/test_ideal_polish.py` (всего **588 тестов**, 100% green, 0 ошибок ruff в 88 файлах и mypy strict в 80 файлах). (Commit: `22f596a`, tag `v1.1.0`)
 - [x] **2026-11-23 Переход локального VLM на `Qwen3-VL-4B-Instruct` (`Q4_K_M` + `mmproj-Q8_0`, 2.81 ГБ):** Проведен сравнительный аудит компактных VLM-моделей (Qwen2.5-VL-3B vs Qwen3-VL-4B-Instruct vs Qwen3.5-4B vs Gemma 4 E4B vs Qwen3-VL-8B) с проверкой реальных размеров GGUF на HuggingFace API. Официальный `Qwen/Qwen3-VL-4B-Instruct-GGUF` (2381.6 МБ + 432.9 МБ = **2.81 ГБ**) легче `Qwen2.5-VL-3B` (3.12 ГБ), новее на поколение, точнее в GUI Grounding (DeepStack) и без задержки `<think>` для Streaming TTS. Обновлены `core/bootstrap.py`, `core/brain/llama_manager.py`, `core/brain/llm_client.py`, `config/settings.json`, `.env.example`, `scripts/download_models.py`, `scripts/run_llama_server.*`, `AGENTS.md`, `README.md` и тесты (588/588 green).
+- [x] **2026-11-23 Исправления живого запуска, ротируемое логирование и редизайн UI (`GupkaCommander.exe`):**
+  1. Устранено самопрерывание голоса TTS динамиками: в `VoicePipeline` добавлена защита от эха (`echo_guard=True`, `echo_tail_seconds=0.45`, `_is_echo_suppressed()` с подавлением входа и сбросом VAD), а в `main.py` — остановка предыдущей речи при запуске новой команды.
+  2. Исправлена маршрутизация AI-команд и поиск программ: в `IntentRouter` фраза `«открой заметки»` ведёт в память, медиа/веб-запросы (YouTube и т.д.) и фразы `> 3` слов проходят в `Intent.AI_COGNITIVE`; в `GupkaCommanderApp._handle_open_app` добавлен fallback к LLM; в `AppFinder` добавлен приоритет `_BUILTIN_WINDOWS_APPS` (`notepad.exe`) и токен-ориентированный подсчёт схожести (защита от ложного срабатывания «Git Release Notes» вместо Блокнота).
+  3. Обновлены флаги VLM и логирование: в `LlamaServerManager` и скрипты запуска добавлены `--image-min-tokens 1024 --jinja`, в `LocalLLMClient` увеличен `timeout_seconds` до `30.0`, в `core/paths.py` и `main.py` добавлено ротируемое логирование в `%LOCALAPPDATA%\GupkaCommander\logs\gupka.log` (безопасно при `sys.stderr is None`).
+  4. Переработан интерфейс `SpotlightBar` и `ChatDrawer` (`gui/styles.py`, `gui/chat_drawer.py`, `gui/spotlight_bar.py`): стиль Windows 11 Fluent Dark Glass, векторные иконки `QPainter` без эмодзи, русскоязычные статусы (`Готов`, `Слушаю`, `Думаю...`, `Говорю`, `Без звука`), многослойная тень в `paintEvent`, перетаскивание окна мышью, кнопки микрофона и настроек с синхронизацией в `TrayManager`.
+  5. Проведены визуальная проверка скриншотов и прогон сенсоров (`ruff check`/`format`, `mypy strict` в 81 файле, `597/597` pytest). Пересобран `dist/GupkaCommander/GupkaCommander.exe`.
 
 ## 3. Active Task (Current Focus)
-- **Feature:** Все рекомендации аудита реализованы, протестированы и верифицированы — Golden Master **10.0 / 10** по контрольному аудиту Gemini 4 Argon.
-- **Status:** 588/588 тестов зелёные (100%), 0 ошибок mypy в 80 файлах, 0 ошибок ruff в 88 файлах, финальный `dist/GupkaCommander/GupkaCommander.exe` (70.53 MB, пакет 898.49 MB) проверен (`exit code 0`).
-- **Verification Plan:** Все детерминированные сенсоры и контрольный аудит пройдены на 10/10. Релиз v1.1.0 готов.
+- **Feature:** Устранение эха TTS, исправление выполнения AI-команд (YouTube / Блокнот / Заметки), внедрение файловых логов и редизайн Fluent Glass UI.
+- **Status:** 597/597 тестов зелёные (100%), 0 ошибок mypy в 81 файле, 0 ошибок ruff в 89 файлах; собран `dist/GupkaCommander/GupkaCommander.exe` (70.54 MB, пакет 898.50 MB).
+- **Verification Plan:** Завершение smoke-теста `.exe` и публикация релиза в `origin/main`.
 
 ## 4. Next Immediate Steps (Backlog)
 - [x] **Вектор 1:** Microsoft UI Automation (Tier 1 UIA) — мгновенный клик и ввод в окнах по именам элементов.

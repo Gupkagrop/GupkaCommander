@@ -6,8 +6,20 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
+
+
+def _isolated_env_without_llama(tmp_path: Path) -> dict[str, str]:
+    """Создает изолированную среду ОС без установленного llama-server.exe."""
+    env = os.environ.copy()
+    env.pop("LLAMA_SERVER_PATH", None)
+    env["LOCALAPPDATA"] = str(tmp_path)
+    env["USERPROFILE"] = str(tmp_path)
+    system_root = env.get("SystemRoot", r"C:\Windows")
+    env["PATH"] = f"{system_root}\\System32;{system_root}\\System32\\WindowsPowerShell\\v1.0"
+    return env
 
 
 class TestRunLlamaServerScripts:
@@ -41,7 +53,7 @@ class TestRunLlamaServerScripts:
         for snippet in required_snippets:
             assert snippet in ps1_content, f"В ps1 файле отсутствует: {snippet}"
 
-    def test_bat_script_execution_without_binary(self) -> None:
+    def test_bat_script_execution_without_binary(self, tmp_path: Path) -> None:
         """Проверка вежливого сообщения об отсутствии бинарника при запуске .bat файла."""
         project_root = Path(__file__).resolve().parent.parent
         bat_file = project_root / "scripts" / "run_llama_server.bat"
@@ -49,17 +61,19 @@ class TestRunLlamaServerScripts:
         result = subprocess.run(
             ["cmd.exe", "/c", str(bat_file), "--no-pause"],
             cwd=str(project_root),
+            env=_isolated_env_without_llama(tmp_path),
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
+            timeout=15,
         )
 
         assert result.returncode == 1
         assert "llama-server.exe" in result.stdout
         assert "https://github.com/ggerganov/llama.cpp/releases" in result.stdout
 
-    def test_ps1_script_execution_without_binary(self) -> None:
+    def test_ps1_script_execution_without_binary(self, tmp_path: Path) -> None:
         """Проверка вежливого сообщения об отсутствии бинарника при запуске .ps1 файла."""
         project_root = Path(__file__).resolve().parent.parent
         ps1_file = project_root / "scripts" / "run_llama_server.ps1"
@@ -76,10 +90,12 @@ class TestRunLlamaServerScripts:
                 "-NoPause",
             ],
             cwd=str(project_root),
+            env=_isolated_env_without_llama(tmp_path),
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
+            timeout=15,
         )
 
         assert result.returncode == 1

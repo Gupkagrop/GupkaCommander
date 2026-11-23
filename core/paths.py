@@ -177,3 +177,15 @@ def get_bin_dir() -> Path:
     bin_dir = get_data_root() / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     return bin_dir
+
+
+def get_logs_dir() -> Path:
+    """
+    Возвращает директорию для сохранения ротируемых логов приложения.
+
+    Returns:
+        Абсолютный путь к директории logs внутри DATA_DIR.
+    """
+    logs_dir = get_data_root() / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    return logs_dir
