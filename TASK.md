@@ -6,8 +6,8 @@
 
 ## 1. Project Health & Stage
 - **Current Phase:** GupkaCommander 2.0 Release (Fluent 2 «Губка» Docked Blade UI, 3-Tier Router + ReAct CDP/UIA/SoM, Multi-Monitor Per-Monitor DPI v2, Memory v2 FTS5, GPU-стек Qwen3.5-4B / Qwen3-TTS / GigaAM v3 ONNX)
-- **Status:** Production-Grade Release 2.0 (779/779 Tests Green, 0 Ruff in 110 files, 0 Mypy Strict in 102 files)
-- **Last Updated:** 2026-11-24 20:58
+- **Status:** Production-Grade Release 2.0 (801/801 Tests Green, 0 Ruff in 110 files, 0 Mypy Strict in 102 files)
+- **Last Updated:** 2026-11-24 22:45
 - **Active Branch:** `main`
 
 ## 2. Completed Milestones
@@ -85,10 +85,15 @@
   3. `core/routing/intent_router.py`: расширены `_LEADING_ACTION_RE`, `_OS_ACTION_VERB_RE` (`зайди`, `загугли`, `переключи`, `поставь`, `прочитай`) и `_SUBSEQUENT_ACTION_RE` (`скажи`, `покажи`, `прочитай`); составные команды вроде `"Зайди в браузер, найди погоду в Москве и скажи сколько градусов"` маршрутизируются в `ExecutionTier.AUTONOMOUS_AGENT`, а болтовня/вопросы остаются в `ExecutionTier.CASUAL_CHAT`.
   4. Регрессионные тесты (`tests/test_v2_main_wiring.py`, `tests/test_react_cdp_agent.py`, `tests/test_gui_components.py`): `ruff` (0 в 110 файлах), `mypy` (0 в 102 файлах), `pytest` (**779/779 passed** за 18.20 с).
   5. Пересборка и оба живых smoke-теста: `GupkaCommander.exe` (**70.77 MB**), пакет **898.89 MB**, `dist/GupkaCommander-v2.0.0-win64-portable.zip` (**357.74 MB**); headless-тест `ExitCode == 0`; full-stack живой `.exe` с голосом (`--quiet --skip-setup`) подтвердил `HasExited == False`, запуск `llama-server.exe` VLM, `Alt+Space` (`pynput`), `VoicePipeline`, `Silero VAD ONNX` и `VRAMBudgetGuard` без `Traceback` и `[ERROR]` в `gupka.log`, после чего процессы чисто остановлены.
+- [x] **2026-11-24 Финальная интеграция Fluent 2 UI-редизайна, исправлений ядра/ретраев/Vision/TTS и починка PATH-изоляции сборки `.exe`:**
+  1. **UI-редизайн (`swarm-ui-redesign-neon-7a3314a6`, `cf97fa3`):** в `gui/spotlight_bar.py` и `gui/theme_manager.py` убран серый DWM-прямоугольник (`BackdropType.NONE`) и реализована кастомная отрисовка Fluent 2 стекла внутри `QPainterPath`; в `gui/chat_drawer.py` добавлен `render_markdown_to_html` (`Qt.TextFormat.RichText`, код-блоки, `get_text()`, отложенная автопрокрутка без обрезки); в `gui/sponge_pore_widget.py` и `gui/agent_widgets.py` перерисован скульптурный squircle-бейдж Губки и компактные 22px `ContextChipBar` (`tests/test_spotlight_v2_integration.py`).
+  2. **Ядро, ретраи, Vision/SoM и VLM/TTS очереди (`swarm-agent-brain-fix-3fa5a819`, `26dfc0f`):** в `core/routing/intent_router.py` и `main.py` добавлены `_last_agent_goal`, распознавание фраз ретрая (`is_retry_query` -> `ReActEngine`), заголовок активного окна Win32 в чипах, `DEFAULT_CHAT_SYSTEM_PROMPT` и гарантированное закрытие стриминговых карточек; в `core/agent/react_loop.py` включены SoM Vision при скудном UIA (`<= 6` элементов) и фильтрация кнопок рамки окна; в `core/os_controller.py` добавлен UTF-8 вывод PowerShell; в `core/brain/llama_manager.py` и `core/voice/qwen_tts_synthesizer.py` добавлены ожидание готовности VLM перед стартом TTS (`_wait_for_vlm_ready`), `VRAMBudgetGuard.min_free_gb=2.2` и circuit breaker (`cooldown_seconds=45.0`, `timeout_seconds=8.0`).
+  3. **Сборка `.exe` (`scripts/build_executable.py`):** добавлен `_build_clean_env()` для очистки `dist/` из `PATH` перед вызовом PyInstaller, чтобы `libssl-3-x64.dll` и `libcrypto-3-x64.dll` не резолвились в удаляемый каталог `dist\GupkaCommander\_internal`.
+  4. **Финальная верификация и smoke-тесты:** `ruff check/format` (0 ошибок в 110 файлах), `mypy core gui tests scripts main.py` (0 ошибок в 102 файлах), `pytest -q` (**801/801 passed**); пересобраны `GupkaCommander.exe` (**70.79 MB**, пакет **898.90 MB**) и `GupkaCommander-v2.0.0-win64-portable.zip` (**357.77 MB**); пройдены headless (`ExitCode == 0`) и живой full-stack GUI + голос (`HasExited == False`, 0 `Traceback`, 0 `[ERROR]`, чистое завершение `remaining=0`).
 
 ## 3. Active Task (Current Focus)
 - **Feature:** Релиз GupkaCommander 2.0 — Fluent 2 «Губка», ReAct CDP/UIA/SoM и GPU-стек 2026.
-- **Status:** Все фазы и runtime-исправления объединены в `main`; 779/779 тестов зелёные (100%), 0 ошибок `mypy` в 102 файлах, 0 ошибок `ruff` в 110 файлах; `GupkaCommander.exe` (70.77 MB) и `GupkaCommander-v2.0.0-win64-portable.zip` (357.74 MB) собраны и подтверждены headless и живым full-stack smoke-тестом с голосом.
+- **Status:** Финальная интеграция Fluent 2 UI-редизайна и исправлений ядра/Vision/TTS в `main`; **801/801** тестов зелёные (100%), 0 ошибок `mypy` в 102 файлах, 0 ошибок `ruff` в 110 файлах; `GupkaCommander.exe` (70.79 MB) и `GupkaCommander-v2.0.0-win64-portable.zip` (357.77 MB) собраны и подтверждены headless и живым full-stack smoke-тестом с голосом.
 - **Verification Plan:** Завершено. Опубликовано в `origin/main`.
 
 ## 4. Next Immediate Steps (Backlog)
@@ -111,4 +116,4 @@
   - `2026-11-20`: Двухуровневый инсталлятор Inno Setup (`scripts/installer.iss`): по умолчанию без UAC в AppData с диалогом выбора Program Files.
   - `2026-11-20`: Комплексный харденинг `ShellExecutor` против обфускации backtick, `-EncodedCommand`, Base64 и деструктивных операций файловой системы.
 - **Known Blockers / Warnings:**
-  - Нет блокеров. Релиз GupkaCommander 2.0 завершён, собран и протестирован (779/779 тестов зелёные).
+  - Нет блокеров. Релиз GupkaCommander 2.0 завершён, собран и протестирован (801/801 тестов зелёные).

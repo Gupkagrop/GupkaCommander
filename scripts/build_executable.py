@@ -9,12 +9,37 @@
 5. Вывод статистики размера дистрибутива и архива.
 """
 
+import os
 import subprocess
 import sys
 import zipfile
 from pathlib import Path
 
 PORTABLE_ZIP_NAME = "GupkaCommander-v2.0.0-win64-portable.zip"
+
+
+def _build_clean_env(project_root: Path) -> dict[str, str]:
+    """Удаляет пути внутри dist/ из PATH, чтобы PyInstaller не брал DLL из прошлой сборки."""
+    env = os.environ.copy()
+    dist_root = (project_root / "dist").resolve()
+    raw_path = env.get("PATH", "")
+    if not raw_path:
+        return env
+
+    cleaned_entries: list[str] = []
+    for entry in raw_path.split(os.pathsep):
+        if not entry:
+            continue
+        try:
+            resolved = Path(entry).resolve()
+            if resolved == dist_root or resolved.is_relative_to(dist_root):
+                continue
+        except OSError:
+            pass
+        cleaned_entries.append(entry)
+
+    env["PATH"] = os.pathsep.join(cleaned_entries)
+    return env
 
 
 def ensure_icon(project_root: Path) -> Path:
@@ -98,7 +123,7 @@ def build_executable() -> int:
         "--clean",
     ]
 
-    result = subprocess.run(cmd, cwd=str(project_root))
+    result = subprocess.run(cmd, cwd=str(project_root), env=_build_clean_env(project_root))
     if result.returncode != 0:
         print(f"❌ Ошибка сборки PyInstaller! Код возврата: {result.returncode}")
         return result.returncode
