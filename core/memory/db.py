@@ -8,8 +8,10 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-# SQL-схема инициализации таблиц долговременной памяти и полнотекстового поиска FTS5
-SCHEMA_SQL: str = """
+SCHEMA_VERSION: int = 2
+
+# Базовая SQL-схема v1: факты о пользователе, заметки (с FTS5) и диалоги
+SCHEMA_V1_SQL: str = """
 -- Таблица структурированных фактов о пользователе и его предпочтениях
 CREATE TABLE IF NOT EXISTS user_facts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,6 +76,88 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE INDEX IF NOT EXISTS idx_conversations_created_at ON conversations(created_at);
 """
 
+# Расширение SQL-схемы v2: FTS5 для диалогов, эпизодическая память и сводки
+SCHEMA_V2_SQL: str = """
+-- Виртуальная таблица FTS5 для полнотекстового поиска по истории диалогов
+CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts USING fts5(
+    text,
+    content='conversations',
+    content_rowid='id'
+);
+
+-- Триггеры синхронизации FTS5 индекса с таблицей conversations
+CREATE TRIGGER IF NOT EXISTS conversations_ai AFTER INSERT ON conversations BEGIN
+    INSERT INTO conversations_fts(rowid, text)
+    VALUES (new.id, new.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS conversations_ad AFTER DELETE ON conversations BEGIN
+    INSERT INTO conversations_fts(conversations_fts, rowid, text)
+    VALUES ('delete', old.id, old.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS conversations_au AFTER UPDATE ON conversations BEGIN
+    INSERT INTO conversations_fts(conversations_fts, rowid, text)
+    VALUES ('delete', old.id, old.text);
+    INSERT INTO conversations_fts(rowid, text)
+    VALUES (new.id, new.text);
+END;
+
+-- Таблица эпизодической памяти выполненных многошаговых задач
+CREATE TABLE IF NOT EXISTS task_episodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal TEXT NOT NULL,
+    steps_json TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    app_context TEXT DEFAULT '',
+    success INTEGER DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_episodes_created_at ON task_episodes(created_at);
+CREATE INDEX IF NOT EXISTS idx_task_episodes_success ON task_episodes(success);
+
+-- Виртуальная таблица FTS5 для поиска похожего опыта по цели, результату и контексту
+CREATE VIRTUAL TABLE IF NOT EXISTS task_episodes_fts USING fts5(
+    goal,
+    outcome,
+    app_context,
+    content='task_episodes',
+    content_rowid='id'
+);
+
+-- Триггеры синхронизации FTS5 индекса с таблицей task_episodes
+CREATE TRIGGER IF NOT EXISTS task_episodes_ai AFTER INSERT ON task_episodes BEGIN
+    INSERT INTO task_episodes_fts(rowid, goal, outcome, app_context)
+    VALUES (new.id, new.goal, new.outcome, new.app_context);
+END;
+
+CREATE TRIGGER IF NOT EXISTS task_episodes_ad AFTER DELETE ON task_episodes BEGIN
+    INSERT INTO task_episodes_fts(task_episodes_fts, rowid, goal, outcome, app_context)
+    VALUES ('delete', old.id, old.goal, old.outcome, old.app_context);
+END;
+
+CREATE TRIGGER IF NOT EXISTS task_episodes_au AFTER UPDATE ON task_episodes BEGIN
+    INSERT INTO task_episodes_fts(task_episodes_fts, rowid, goal, outcome, app_context)
+    VALUES ('delete', old.id, old.goal, old.outcome, old.app_context);
+    INSERT INTO task_episodes_fts(rowid, goal, outcome, app_context)
+    VALUES (new.id, new.goal, new.outcome, new.app_context);
+END;
+
+-- Таблица сжатых сводок диалога для экономии контекстного окна
+CREATE TABLE IF NOT EXISTS memory_summaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    summary TEXT NOT NULL,
+    turn_range TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_summaries_created_at ON memory_summaries(created_at);
+"""
+
+# Полная актуальная схема инициализации базы данных
+SCHEMA_SQL: str = f"{SCHEMA_V1_SQL}\n{SCHEMA_V2_SQL}"
+
 
 def get_utc_now_iso() -> str:
     """Возвращает текущую временную метку UTC в формате ISO-8601."""
@@ -89,6 +173,27 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     except Exception:
         conn.rollback()
         raise
+
+
+def migrate_schema_v2(conn: sqlite3.Connection) -> None:
+    """Выполняет идемпотентную миграцию базы данных до схемы v2.
+
+    Создает виртуальные таблицы FTS5 для диалогов и эпизодов, таблицу сводок,
+    синхронизирующие триггеры, а также индексирует ранее сохраненные записи.
+
+    Args:
+        conn: Активное подключение к базе данных SQLite.
+    """
+    version_row = conn.execute("PRAGMA user_version;").fetchone()
+    current_version: int = int(version_row[0]) if version_row is not None else 0
+    if current_version >= SCHEMA_VERSION:
+        return
+
+    conn.executescript(SCHEMA_V2_SQL)
+    conn.execute("INSERT INTO conversations_fts(conversations_fts) VALUES ('rebuild');")
+    conn.execute("INSERT INTO task_episodes_fts(task_episodes_fts) VALUES ('rebuild');")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION};")
+    conn.commit()
 
 
 def init_database(db_path: str | Path = "config/memory.db") -> sqlite3.Connection:
@@ -120,7 +225,7 @@ def init_database(db_path: str | Path = "config/memory.db") -> sqlite3.Connectio
         conn.execute("PRAGMA busy_timeout = 5000;")
         conn.row_factory = sqlite3.Row
         conn.executescript(SCHEMA_SQL)
-        conn.commit()
+        migrate_schema_v2(conn)
     except Exception:
         conn.rollback()
         raise
