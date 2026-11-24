@@ -35,13 +35,19 @@ class TestRunLlamaServerScripts:
         assert ps1_file.exists(), "Скрипт run_llama_server.ps1 должен существовать"
 
         required_snippets = [
-            "qwen3-vl-4b-instruct-q4_k_m.gguf",
-            "mmproj-qwen3-vl-4b-instruct-q8_0.gguf",
+            "Qwen3.5-4B-Q4_K_M.gguf",
+            "mmproj-qwen3.5-4b-f16.gguf",
+            "Qwen3-TTS-12Hz-1.7B-Base-Q4_K_M.gguf",
             "-ngl",
             "99",
             "8080",
+            "8081",
             "127.0.0.1",
-            "4096",
+            "8192",
+            "-fa",
+            "-ctk",
+            "q8_0",
+            "--tts-lang",
             "https://github.com/ggerganov/llama.cpp/releases",
         ]
 

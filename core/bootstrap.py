@@ -2,9 +2,9 @@
 
 > [!NOTE]
 > **Назначение файла:** Диагностика наличия локальных речевых моделей (Silero VAD, Piper TTS,
-> Faster-Whisper), мультимодальной модели VLM (Qwen2.5-VL-3B GGUF) и бинарного сервера
-> llama-server.exe, а также их безопасная потоковая загрузка с докачкой, отменой и проверкой
-> свободного места на диске для автономного .exe дистрибутива.
+> Faster-Whisper, GigaAM v3 ONNX, Qwen3-TTS), мультимодальной модели VLM (Qwen3.5-4B GGUF)
+> и бинарного сервера llama-server.exe, а также их безопасная потоковая загрузка с докачкой,
+> отменой и проверкой свободного места на диске для автономного .exe дистрибутива.
 """
 
 from __future__ import annotations
@@ -50,16 +50,28 @@ WHISPER_FILES: tuple[str, ...] = (
     "vocabulary.txt",
     "tokenizer.json",
 )
-VLM_MODEL_URL = (
-    "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/"
-    "Qwen3VL-4B-Instruct-Q4_K_M.gguf"
+VLM_MODEL_URL = "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf"
+VLM_MMPROJ_URL = "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf"
+VLM_MODEL_FILENAME = "Qwen3.5-4B-Q4_K_M.gguf"
+VLM_MMPROJ_FILENAME = "mmproj-qwen3.5-4b-f16.gguf"
+QWEN_TTS_MODEL_URL = (
+    "https://huggingface.co/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF/resolve/main/"
+    "Qwen3-TTS-12Hz-1.7B-Base-Q4_K_M.gguf"
 )
-VLM_MMPROJ_URL = (
-    "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/"
-    "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+QWEN_TTS_MMPROJ_URL = (
+    "https://huggingface.co/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF/resolve/main/"
+    "mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf"
 )
-VLM_MODEL_FILENAME = "qwen3-vl-4b-instruct-q4_k_m.gguf"
-VLM_MMPROJ_FILENAME = "mmproj-qwen3-vl-4b-instruct-q8_0.gguf"
+QWEN_TTS_MODEL_FILENAME = "Qwen3-TTS-12Hz-1.7B-Base-Q4_K_M.gguf"
+QWEN_TTS_MMPROJ_FILENAME = "mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf"
+GIGAAM_MODEL_URL = (
+    "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_e2e_ctc.int8.onnx"
+)
+GIGAAM_VOCAB_URL = (
+    "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_e2e_ctc_vocab.txt"
+)
+GIGAAM_MODEL_FILENAME = "v3_e2e_ctc.int8.onnx"
+GIGAAM_VOCAB_FILENAME = "v3_e2e_ctc_vocab.txt"
 LLAMA_RELEASES_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5"
 
 BOOTSTRAP_STATE_FILE = "bootstrap_state.json"
@@ -68,6 +80,8 @@ HTTP_TIMEOUT_S = 30
 MIN_VAD_BYTES = 100 * 1024
 MIN_PIPER_BYTES = 1 * 1024 * 1024
 MIN_WHISPER_BYTES = 10 * 1024 * 1024
+MIN_GIGAAM_BYTES = 50 * 1024 * 1024
+MIN_TTS_BYTES = 100 * 1024 * 1024
 MIN_VLM_BYTES = 100 * 1024 * 1024
 
 
@@ -194,13 +208,25 @@ def _get_free_space_mb(directory: Path) -> float:
 
 
 def _select_llama_asset(releases: list[dict[str, Any]]) -> tuple[str, str] | None:
-    """Выбирает наилучший Windows x64 архив llama.cpp (приоритет: Vulkan -> CPU)."""
-    preferred_tokens = ("bin-win-vulkan-x64.zip", "bin-win-cpu-x64.zip")
+    """Выбирает наилучший Windows x64 архив llama.cpp (приоритет: CUDA -> Vulkan -> CPU)."""
     for release in releases:
         assets = release.get("assets", [])
         if not isinstance(assets, list) or not assets:
             continue
-        for token in preferred_tokens:
+        # 1. Приоритет: NVIDIA CUDA (RTX 5050 и аналоги)
+        for asset in assets:
+            name = str(asset.get("name", ""))
+            url = str(asset.get("browser_download_url", ""))
+            low = name.lower()
+            if (
+                low.startswith("llama-")
+                and "bin-win-cuda-" in low
+                and low.endswith("-x64.zip")
+                and url
+            ):
+                return name, url
+        # 2. Резерв: Vulkan -> CPU
+        for token in ("bin-win-vulkan-x64.zip", "bin-win-cpu-x64.zip"):
             for asset in assets:
                 name = str(asset.get("name", ""))
                 url = str(asset.get("browser_download_url", ""))
@@ -287,6 +313,10 @@ class DependencyManager:
         piper_onnx = self.models_dir / "piper" / "ru_RU-dmitri-medium.onnx"
         piper_json = self.models_dir / "piper" / "ru_RU-dmitri-medium.onnx.json"
         whisper_dir = self.models_dir / "whisper"
+        gigaam_model = self.models_dir / "gigaam" / GIGAAM_MODEL_FILENAME
+        gigaam_vocab = self.models_dir / "gigaam" / GIGAAM_VOCAB_FILENAME
+        tts_model = self.models_dir / "tts" / QWEN_TTS_MODEL_FILENAME
+        tts_mmproj = self.models_dir / "tts" / QWEN_TTS_MMPROJ_FILENAME
         vlm_model = self.models_dir / "llm" / VLM_MODEL_FILENAME
         vlm_mmproj = self.models_dir / "llm" / VLM_MMPROJ_FILENAME
         llama_bin = self.find_llama_server()
@@ -305,7 +335,7 @@ class DependencyManager:
             DependencyItem(
                 id="piper_tts",
                 name="Piper TTS (русский голос Dmitri)",
-                description="Офлайн-синтез русской речи с потоковым выводом.",
+                description="Легковесный офлайн-синтез русской речи (fallback / CPU).",
                 group=DependencyGroup.VOICE,
                 approx_size_mb=60.3,
                 required_for_default=True,
@@ -317,7 +347,7 @@ class DependencyManager:
             DependencyItem(
                 id="faster_whisper",
                 name="Faster-Whisper Base (INT8 CPU)",
-                description="Офлайн-распознавание русской и английской речи.",
+                description="Резервное офлайн-распознавание русской и английской речи.",
                 group=DependencyGroup.VOICE,
                 approx_size_mb=138.5,
                 required_for_default=True,
@@ -325,11 +355,37 @@ class DependencyManager:
                 target_paths=[whisper_dir / f for f in WHISPER_FILES],
             ),
             DependencyItem(
+                id="gigaam_v3",
+                name="GigaAM v3 E2E CTC (INT8 ONNX)",
+                description="Рекомендуемое быстрое распознавание русской и IT-речи без PyTorch.",
+                group=DependencyGroup.VOICE,
+                approx_size_mb=215.0,
+                required_for_default=False,
+                installed=(
+                    _is_valid_file(gigaam_model, MIN_GIGAAM_BYTES)
+                    and _is_valid_file(gigaam_vocab, 50)
+                ),
+                target_paths=[gigaam_model, gigaam_vocab],
+            ),
+            DependencyItem(
+                id="qwen3_tts",
+                name="Qwen3-TTS 1.7B (GPU llama-server :8081)",
+                description="Реалистичный GPU-синтез русской речи через llama-server /tts.",
+                group=DependencyGroup.VOICE,
+                approx_size_mb=1414.0,
+                required_for_default=False,
+                installed=(
+                    _is_valid_file(tts_model, MIN_TTS_BYTES)
+                    and _is_valid_file(tts_mmproj, MIN_TTS_BYTES)
+                ),
+                target_paths=[tts_model, tts_mmproj],
+            ),
+            DependencyItem(
                 id="vlm_qwen",
-                name="Qwen3-VL-4B-Instruct (Q4_K_M + Vision)",
+                name="Qwen3.5-4B (Q4_K_M + Vision F16)",
                 description="Локальный ИИ-мозг для диалога, планирования и точного GUI-зрения.",
                 group=DependencyGroup.VLM,
-                approx_size_mb=2815.0,
+                approx_size_mb=3255.0,
                 required_for_default=False,
                 installed=(
                     _is_valid_file(vlm_model, MIN_VLM_BYTES)
@@ -339,8 +395,8 @@ class DependencyManager:
             ),
             DependencyItem(
                 id="llama_server",
-                name="Сервер инференса llama.cpp (Vulkan GPU)",
-                description="Исполняемый движок llama-server.exe для запуска Qwen3-VL-4B.",
+                name="Сервер инференса llama.cpp (CUDA/Vulkan GPU)",
+                description="Движок llama-server.exe для запуска Qwen3.5-4B и Qwen3-TTS.",
                 group=DependencyGroup.RUNTIME,
                 approx_size_mb=37.0,
                 required_for_default=False,
@@ -438,18 +494,48 @@ class DependencyManager:
                 )
                 for filename in WHISPER_FILES
             ]
+        if item_id == "gigaam_v3":
+            return [
+                FileSpec(
+                    url=GIGAAM_MODEL_URL,
+                    relative_path=f"gigaam/{GIGAAM_MODEL_FILENAME}",
+                    label="GigaAM v3 E2E CTC INT8",
+                    min_bytes=MIN_GIGAAM_BYTES,
+                ),
+                FileSpec(
+                    url=GIGAAM_VOCAB_URL,
+                    relative_path=f"gigaam/{GIGAAM_VOCAB_FILENAME}",
+                    label="GigaAM v3 Словарь",
+                    min_bytes=50,
+                ),
+            ]
+        if item_id == "qwen3_tts":
+            return [
+                FileSpec(
+                    url=QWEN_TTS_MODEL_URL,
+                    relative_path=f"tts/{QWEN_TTS_MODEL_FILENAME}",
+                    label="Qwen3-TTS 1.7B Q4_K_M",
+                    min_bytes=MIN_TTS_BYTES,
+                ),
+                FileSpec(
+                    url=QWEN_TTS_MMPROJ_URL,
+                    relative_path=f"tts/{QWEN_TTS_MMPROJ_FILENAME}",
+                    label="Qwen3-TTS Projector Q8_0",
+                    min_bytes=MIN_TTS_BYTES,
+                ),
+            ]
         if item_id == "vlm_qwen":
             return [
                 FileSpec(
                     url=VLM_MODEL_URL,
                     relative_path=f"llm/{VLM_MODEL_FILENAME}",
-                    label="Qwen3-VL-4B Q4_K_M",
+                    label="Qwen3.5-4B Q4_K_M",
                     min_bytes=MIN_VLM_BYTES,
                 ),
                 FileSpec(
                     url=VLM_MMPROJ_URL,
                     relative_path=f"llm/{VLM_MMPROJ_FILENAME}",
-                    label="Qwen3-VL-4B Projector Q8_0",
+                    label="Qwen3.5-4B Projector F16",
                     min_bytes=MIN_VLM_BYTES,
                 ),
             ]

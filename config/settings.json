@@ -19,22 +19,26 @@
   },
   "models": {
     "stt": {
-      "engine": "faster-whisper",
-      "model_size": "small",
+      "engine": "gigaam-v3",
+      "fallback_engine": "faster-whisper",
+      "model_size": "base",
       "device": "cpu",
       "compute_type": "int8"
     },
     "tts": {
-      "engine": "piper",
-      "model_name": "ru_RU-dmitri-medium",
-      "device": "cpu"
+      "engine": "qwen3-tts",
+      "fallback_engine": "piper",
+      "model_name": "Qwen3-TTS-12Hz-1.7B-Base-Q4_K_M.gguf",
+      "lang": "ru",
+      "port": 8081,
+      "device": "cuda"
     },
     "llm": {
       "engine": "llama-cpp",
-      "model_name": "qwen3-vl-4b-instruct-q4_k_m.gguf",
+      "model_name": "Qwen3.5-4B-Q4_K_M.gguf",
       "autostart": true,
       "n_gpu_layers": 99,
-      "context_window": 4096
+      "context_window": 8192
     }
   }
 }

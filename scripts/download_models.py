@@ -1,9 +1,9 @@
 """Скрипт загрузки локальных моделей машинного обучения для GupkaCommander.
 
 > [!NOTE]
-> **Назначение файла:** Загрузка легковесных моделей (Silero VAD, Piper TTS, Faster-Whisper,
-> Qwen2.5-VL GGUF) в локальный каталог проекта с поддержкой возобновления, пропуска существующих
-> файлов и отображения прогресса.
+> **Назначение файла:** Загрузка локальных моделей (Silero VAD, Piper TTS, Faster-Whisper,
+> GigaAM v3 ONNX, Qwen3-TTS GGUF и Qwen3.5-4B GGUF) в локальный каталог проекта с поддержкой
+> возобновления, пропуска существующих файлов и отображения прогресса.
 """
 
 from __future__ import annotations
@@ -32,13 +32,21 @@ PIPER_CONFIG_URL = (
     "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ru/ru_RU/"
     "dmitri/medium/ru_RU-dmitri-medium.onnx.json"
 )
-VLM_MODEL_URL = (
-    "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/"
-    "Qwen3VL-4B-Instruct-Q4_K_M.gguf"
+VLM_MODEL_URL = "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf"
+VLM_MMPROJ_URL = "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf"
+QWEN_TTS_MODEL_URL = (
+    "https://huggingface.co/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF/resolve/main/"
+    "Qwen3-TTS-12Hz-1.7B-Base-Q4_K_M.gguf"
 )
-VLM_MMPROJ_URL = (
-    "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/"
-    "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+QWEN_TTS_MMPROJ_URL = (
+    "https://huggingface.co/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF/resolve/main/"
+    "mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf"
+)
+GIGAAM_MODEL_URL = (
+    "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_e2e_ctc.int8.onnx"
+)
+GIGAAM_VOCAB_URL = (
+    "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_e2e_ctc_vocab.txt"
 )
 WHISPER_REPO_BASE = "https://huggingface.co/Systran/faster-whisper-base/resolve/main"
 WHISPER_FILES = ["model.bin", "config.json", "vocabulary.txt", "tokenizer.json"]
@@ -210,24 +218,66 @@ def download_faster_whisper(
 
 
 def download_vlm_models(models_dir: Path, force: bool = False) -> list[Path]:
-    """Загружает GGUF квантование Qwen3-VL-4B-Instruct и проектор для локального LLM-сервера."""
+    """Загружает GGUF квантование Qwen3.5-4B и проектор F16 для локального LLM-сервера."""
     llm_dir = models_dir / "llm"
-    model_path = llm_dir / "qwen3-vl-4b-instruct-q4_k_m.gguf"
-    mmproj_path = llm_dir / "mmproj-qwen3-vl-4b-instruct-q8_0.gguf"
+    model_path = llm_dir / "Qwen3.5-4B-Q4_K_M.gguf"
+    mmproj_path = llm_dir / "mmproj-qwen3.5-4b-f16.gguf"
 
     download_file(
         VLM_MODEL_URL,
         model_path,
-        description="Qwen3-VL-4B-Instruct Q4_K_M (GGUF)",
+        description="Qwen3.5-4B Q4_K_M (GGUF)",
         force=force,
     )
     download_file(
         VLM_MMPROJ_URL,
         mmproj_path,
-        description="Qwen3-VL-4B Multimodal Projector Q8_0 (GGUF)",
+        description="Qwen3.5-4B Multimodal Projector F16 (GGUF)",
         force=force,
     )
     return [model_path, mmproj_path]
+
+
+def download_qwen_tts_models(models_dir: Path, force: bool = False) -> list[Path]:
+    """Загружает GGUF веса Qwen3-TTS 1.7B и проектор Q8_0 для GPU-синтеза (:8081)."""
+    tts_dir = models_dir / "tts"
+    model_path = tts_dir / "Qwen3-TTS-12Hz-1.7B-Base-Q4_K_M.gguf"
+    mmproj_path = tts_dir / "mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf"
+
+    download_file(
+        QWEN_TTS_MODEL_URL,
+        model_path,
+        description="Qwen3-TTS-12Hz-1.7B Q4_K_M (GGUF)",
+        force=force,
+    )
+    download_file(
+        QWEN_TTS_MMPROJ_URL,
+        mmproj_path,
+        description="Qwen3-TTS Multimodal Projector Q8_0 (GGUF)",
+        force=force,
+    )
+    return [model_path, mmproj_path]
+
+
+def download_gigaam_models(models_dir: Path, force: bool = False) -> list[Path]:
+    """Загружает INT8 ONNX модель и словарь GigaAM v3 E2E CTC."""
+    gigaam_dir = models_dir / "gigaam"
+    model_path = gigaam_dir / "v3_e2e_ctc.int8.onnx"
+    vocab_path = gigaam_dir / "v3_e2e_ctc_vocab.txt"
+
+    download_file(
+        GIGAAM_MODEL_URL,
+        model_path,
+        description="GigaAM v3 E2E CTC (INT8 ONNX)",
+        force=force,
+    )
+    download_file(
+        GIGAAM_VOCAB_URL,
+        vocab_path,
+        description="GigaAM v3 E2E CTC Словарь",
+        force=force,
+    )
+    return [model_path, vocab_path]
 
 
 def download_voice_models(models_dir: Path, force: bool = False) -> list[Path]:
@@ -264,12 +314,17 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--vlm-only",
         action="store_true",
-        help="Скачать только модели локального VLM (Qwen3-VL-4B-Instruct GGUF).",
+        help="Скачать только модели локального VLM (Qwen3.5-4B GGUF).",
     )
     parser.add_argument(
         "--with-vlm",
         action="store_true",
         help="Скачать речевые модели вместе с VLM (эквивалентно --all).",
+    )
+    parser.add_argument(
+        "--with-gpu-voice",
+        action="store_true",
+        help="Дополнительно скачать модели Qwen3-TTS GGUF и GigaAM v3 ONNX.",
     )
     parser.add_argument(
         "--force",
@@ -290,11 +345,17 @@ def main(argv: list[str] | None = None) -> int:
 
     include_voice = not args.vlm_only
     include_vlm = bool(args.all or args.with_vlm or args.vlm_only)
+    include_gpu_voice = bool(args.with_gpu_voice)
 
     print(f"=== GupkaCommander: Загрузка моделей в '{models_dir}' ===")
     if include_voice:
-        print("\n--- Загрузка речевого контура (CPU) ---")
+        print("\n--- Загрузка базового речевого контура (CPU) ---")
         download_voice_models(models_dir, force=force)
+
+    if include_gpu_voice:
+        print("\n--- Загрузка GPU/ONNX речевого стека 2.0 (GigaAM v3 + Qwen3-TTS) ---")
+        download_gigaam_models(models_dir, force=force)
+        download_qwen_tts_models(models_dir, force=force)
 
     if include_vlm:
         print("\n--- Загрузка локального VLM мозга (GPU) ---")

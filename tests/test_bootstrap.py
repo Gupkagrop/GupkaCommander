@@ -23,10 +23,18 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from core.bootstrap import (
+    GIGAAM_MODEL_FILENAME,
+    GIGAAM_VOCAB_FILENAME,
+    MIN_GIGAAM_BYTES,
     MIN_PIPER_BYTES,
+    MIN_TTS_BYTES,
     MIN_VAD_BYTES,
     MIN_VLM_BYTES,
     MIN_WHISPER_BYTES,
+    QWEN_TTS_MMPROJ_FILENAME,
+    QWEN_TTS_MODEL_FILENAME,
+    VLM_MMPROJ_FILENAME,
+    VLM_MODEL_FILENAME,
     DependencyManager,
     DownloadProgress,
     _safe_extract_zip,
@@ -88,13 +96,18 @@ class TestDependencyManagerCore:
         manager = DependencyManager(models_dir=models_dir, bin_dir=bin_dir, state_file=state_file)
         report = manager.inspect()
 
-        assert len(report.items) == 5
+        assert len(report.items) == 7
         assert {it.id for it in report.missing_required} == {
             "silero_vad",
             "piper_tts",
             "faster_whisper",
         }
-        assert {it.id for it in report.missing_optional} == {"vlm_qwen", "llama_server"}
+        assert {it.id for it in report.missing_optional} == {
+            "gigaam_v3",
+            "qwen3_tts",
+            "vlm_qwen",
+            "llama_server",
+        }
 
         # Создаем валидные заглушки всех файлов
         models_dir.mkdir(parents=True, exist_ok=True)
@@ -113,12 +126,26 @@ class TestDependencyManagerCore:
         (whisper_dir / "model.bin").write_bytes(b"w" * (MIN_WHISPER_BYTES + 1))
         (whisper_dir / "config.json").write_text('{"model": "base"}', encoding="utf-8")
 
+        gigaam_dir = models_dir / "gigaam"
+        gigaam_dir.mkdir(parents=True)
+        (gigaam_dir / GIGAAM_MODEL_FILENAME).write_bytes(b"g")
+        (gigaam_dir / GIGAAM_VOCAB_FILENAME).write_text("а\n" * 30, encoding="utf-8")
+
+        tts_dir = models_dir / "tts"
+        tts_dir.mkdir(parents=True)
+        (tts_dir / QWEN_TTS_MODEL_FILENAME).write_bytes(b"t")
+        (tts_dir / QWEN_TTS_MMPROJ_FILENAME).write_bytes(b"m")
+
         llm_dir = models_dir / "llm"
         llm_dir.mkdir(parents=True)
-        (llm_dir / "qwen3-vl-4b-instruct-q4_k_m.gguf").write_bytes(b"0")
-        (llm_dir / "mmproj-qwen3-vl-4b-instruct-q8_0.gguf").write_bytes(b"0")
-        # Для VLM минимальный порог 100MB, подменяем порог проверкой через sparse/mock
-        with patch("core.bootstrap.MIN_VLM_BYTES", 1):
+        (llm_dir / VLM_MODEL_FILENAME).write_bytes(b"0")
+        (llm_dir / VLM_MMPROJ_FILENAME).write_bytes(b"0")
+        # Для VLM/TTS/GigaAM подменяем минимальный порог проверкой на маленьких файлах
+        with (
+            patch("core.bootstrap.MIN_VLM_BYTES", 1),
+            patch("core.bootstrap.MIN_TTS_BYTES", 1),
+            patch("core.bootstrap.MIN_GIGAAM_BYTES", 1),
+        ):
             bin_dir.mkdir(parents=True, exist_ok=True)
             (bin_dir / "llama-server.exe").write_bytes(b"MZ")
             report_full = manager.inspect()
@@ -126,6 +153,8 @@ class TestDependencyManagerCore:
         assert report_full.missing_required == []
         assert report_full.missing_optional == []
         assert MIN_VLM_BYTES >= 100 * 1024 * 1024
+        assert MIN_TTS_BYTES >= 100 * 1024 * 1024
+        assert MIN_GIGAAM_BYTES >= 50 * 1024 * 1024
 
     def test_should_prompt_user_rules_and_persistence(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
