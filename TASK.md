@@ -53,10 +53,12 @@
 - [x] **2026-11-24 Чекпоинт 1 GupkaCommander 2.0 (Фаза 1 и Фаза 2 в `main`):**
   1. **Фаза 1 (Мультимониторность и SoM):** Влито в `main` из `swarm-phase1-multimonitor-a6e70ce2` (`c422681`). Добавлены `MonitorManager`, Per-Monitor DPI v2, `SoMAnnotator`, обновления `ScreenCapture`, `VisionAgent`, `UIAutomationManager` и тесты `tests/test_multimonitor_som.py`.
   2. **Фаза 2 (Память v2 и контекст LLM):** Влито в `main` из `swarm-phase2-memory-389e44b1` (`3279f99`). Добавлены эпизодическая память v2 с FTS5 (`core/memory/db.py`, `core/memory/memory_manager.py`), многоходовый контекст и `ThinkTagFilter` в `core/brain/llm_client.py`, а также тесты `tests/test_memory_v2_context.py`.
+- [x] **2026-11-24 Чекпоинт 2 GupkaCommander 2.0 (Фаза 4 GPU-стек в `main`):**
+  1. **Фаза 4 (GPU-first Brain & Voice Stack):** Влито в `main` из `swarm-phase4-gpu-voice-dfda1377` (`9fe02b7`). Добавлены `Qwen3.5-4B`, `QwenTTSSynthesizer` через `llama-server :8081` (`core/voice/qwen_tts_synthesizer.py`), `GigaAMOnnxTranscriber` (`core/voice/gigaam_transcriber.py`), двухсервисный `LlamaServerManager` с `VRAMBudgetGuard` (`core/brain/llama_manager.py`), интеграция в `VoicePipeline`, `bootstrap.py` и тесты `tests/test_gpu_voice_v2.py`.
 
 ## 3. Active Task (Current Focus)
-- **Feature:** Интеграция GupkaCommander 2.0 — Чекпоинт 1 (Фаза 1: Multi-Monitor + Per-Monitor DPI v2 + SoMAnnotator; Фаза 2: Memory v2 FTS5/episodes + Qwen3.5 multi-turn & ThinkTagFilter влиты в `main`).
-- **Status:** Фазы 1 и 2 объединены в `main` (без push); выполняется верификация и ожидание следующих этапов интеграции.
+- **Feature:** Интеграция GupkaCommander 2.0 — Чекпоинт 2 (Фаза 1, Фаза 2 и Фаза 4: GPU-стек Qwen3.5-4B + Qwen3-TTS `:8081` + GigaAM v3 ONNX + VRAMBudgetGuard влиты в `main`).
+- **Status:** Фазы 1, 2 и 4 объединены в `main` (без push); выполняется верификация и ожидание следующих этапов интеграции.
 - **Verification Plan:** Прогон `ruff check`, `mypy` и целевого набора `pytest` на `main` перед следующими слияниями.
 
 ## 4. Next Immediate Steps (Backlog)
