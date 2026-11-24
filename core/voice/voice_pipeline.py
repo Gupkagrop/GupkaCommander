@@ -97,6 +97,8 @@ class VoicePipeline:
         self._vad_detector = vad_detector
         self._transcriber = transcriber
         self._synthesizer = synthesizer
+        self._injected_transcriber: bool = transcriber is not None
+        self._injected_synthesizer: bool = synthesizer is not None
 
         self.silence_duration_ms = silence_duration_ms
         self.sample_rate = sample_rate
@@ -233,6 +235,35 @@ class VoicePipeline:
 
                 self._synthesizer = PiperSynthesizer()
         return self._synthesizer
+
+    def reload_engines_from_settings(self) -> None:
+        """Перечитывает движки STT/TTS из settings.json и сбрасывает ленивые инстансы."""
+        new_stt, new_tts, new_tts_url = self._read_engine_config(self._settings_path)
+        old_synth: SynthesizerProtocol | None = None
+
+        with self._state_lock:
+            stt_changed = new_stt.strip().lower() != self._stt_engine.strip().lower()
+            tts_changed = (
+                new_tts.strip().lower() != self._tts_engine.strip().lower()
+                or new_tts_url != self._tts_base_url
+            )
+
+            self._stt_engine = new_stt
+            self._tts_engine = new_tts
+            self._tts_base_url = new_tts_url
+
+            if stt_changed and not self._injected_transcriber:
+                self._transcriber = None
+            if tts_changed:
+                old_synth = self._synthesizer
+                if not self._injected_synthesizer:
+                    self._synthesizer = None
+
+        if old_synth is not None:
+            try:
+                old_synth.stop()
+            except Exception as exc:
+                logger.debug("Ошибка остановки прежнего синтезатора при смене настроек: %s", exc)
 
     @property
     def state(self) -> PipelineState:

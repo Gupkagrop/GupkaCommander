@@ -3,7 +3,7 @@
 ; =====================================================================
 
 #define MyAppName "GupkaCommander"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "2.0.0"
 #define MyAppPublisher "Gupkagrop"
 #define MyAppURL "https://github.com/Gupkagrop/GupkaCommander"
 #define MyAppExeName "GupkaCommander.exe"

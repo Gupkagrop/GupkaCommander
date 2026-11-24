@@ -105,6 +105,7 @@ class VoiceBridge(QObject):
     stream_card_finished = Signal(str)
     agent_step_received = Signal(object)
     agent_progress_changed = Signal(bool, int, int, str, str)
+    context_chips_refresh_requested = Signal()
 
 
 class CommandWorker(QThread):
@@ -230,6 +231,7 @@ class GupkaCommanderApp(QObject):
         self._audio_streamed: bool = False
         self._is_shutting_down: bool = False
         self._is_executing_command: bool = False
+        self._applying_ui_settings: bool = False
         self._execution_lock: threading.Lock = threading.Lock()
         self.voice_bridge = VoiceBridge()
 
@@ -318,14 +320,18 @@ class GupkaCommanderApp(QObject):
             ("set_target_monitor", "target_monitor"),
             ("set_dock_position", "dock_position"),
         )
-        for method_name, key in setters:
-            value = ui_cfg.get(key)
-            if value is None or not hasattr(bar, method_name):
-                continue
-            try:
-                getattr(bar, method_name)(value)
-            except Exception as exc:
-                logger.debug("Не удалось применить ui.%s=%r: %s", key, value, exc)
+        self._applying_ui_settings = True
+        try:
+            for method_name, key in setters:
+                value = ui_cfg.get(key)
+                if value is None or not hasattr(bar, method_name):
+                    continue
+                try:
+                    getattr(bar, method_name)(value)
+                except Exception as exc:
+                    logger.debug("Не удалось применить ui.%s=%r: %s", key, value, exc)
+        finally:
+            self._applying_ui_settings = False
 
     @property
     def spotlight(self) -> SpotlightBar:
@@ -338,7 +344,7 @@ class GupkaCommanderApp(QObject):
         self.voice_bridge.transcription_received.connect(self.handle_transcription)
         self.voice_bridge.state_changed.connect(self.spotlight_bar.set_pipeline_state)
         self.voice_bridge.state_changed.connect(self.tray_manager.set_state)
-        self.voice_bridge.audio_level_received.connect(self.spotlight.waveform.set_audio_level)
+        self.voice_bridge.audio_level_received.connect(self._on_ui_audio_level)
         self.voice_bridge.chat_message_requested.connect(self._ui_add_chat_message)
         self.voice_bridge.input_clear_requested.connect(self._ui_clear_input)
         self.voice_bridge.stream_card_started.connect(self._ui_begin_stream_card)
@@ -346,6 +352,7 @@ class GupkaCommanderApp(QObject):
         self.voice_bridge.stream_card_finished.connect(self._ui_finish_stream_card)
         self.voice_bridge.agent_step_received.connect(self._ui_on_agent_step)
         self.voice_bridge.agent_progress_changed.connect(self._ui_on_agent_progress)
+        self.voice_bridge.context_chips_refresh_requested.connect(self._refresh_context_chips)
 
         # SpotlightBar -> Выполнение команд и быстрые действия панели
         self.spotlight_bar.command_submitted.connect(self._handle_submitted_command)
@@ -355,6 +362,8 @@ class GupkaCommanderApp(QObject):
             self.spotlight_bar.mute_toggled_requested.connect(self._on_spotlight_mute_toggled)
         if hasattr(self.spotlight_bar, "settings_requested"):
             self.spotlight_bar.settings_requested.connect(self.open_settings_dialog)
+        if hasattr(self.spotlight_bar, "dock_position_changed"):
+            self.spotlight_bar.dock_position_changed.connect(self._on_dock_position_changed)
 
         # Горячие клавиши -> Видимость SpotlightBar
         self.hotkey_manager.hotkey_pressed.connect(self.spotlight_bar.toggle_visibility)
@@ -370,6 +379,94 @@ class GupkaCommanderApp(QObject):
 
         # Корректное завершение при закрытии приложения
         self._app.aboutToQuit.connect(self.shutdown)
+
+    def _on_ui_audio_level(self, level: float) -> None:
+        """Передаёт амплитуду микрофона в SpotlightBar (SpongePore + Waveform) или mock."""
+        if isinstance(self.spotlight_bar, SpotlightBar):
+            self.spotlight_bar.set_audio_level(level)
+            return
+        waveform = getattr(self.spotlight, "waveform", None)
+        if waveform is not None and hasattr(waveform, "set_audio_level"):
+            waveform.set_audio_level(level)
+
+    def _on_dock_position_changed(self, position: str) -> None:
+        """Сохраняет выбранную позицию докинга в config/settings.json."""
+        if self._applying_ui_settings:
+            return
+        clean_pos = str(position).strip().lower()
+        if not clean_pos:
+            return
+        try:
+            path = get_config_path("settings.json")
+            data: dict[str, Any] = {}
+            if path.is_file():
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    data = loaded
+            ui_cfg = data.get("ui")
+            if not isinstance(ui_cfg, dict):
+                ui_cfg = {}
+                data["ui"] = ui_cfg
+            if ui_cfg.get("dock_position") == clean_pos:
+                return
+            ui_cfg["dock_position"] = clean_pos
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            logger.debug("Не удалось сохранить ui.dock_position=%r: %s", clean_pos, exc)
+
+    def _refresh_context_chips(self) -> None:
+        """Обновляет контекстные чипы SpotlightBar (память, монитор, голос)."""
+        if not hasattr(self.spotlight_bar, "update_context_chips"):
+            return
+        if not self._is_gui_thread():
+            self.voice_bridge.context_chips_refresh_requested.emit()
+            return
+
+        memory_count = 0
+        try:
+            facts = self.memory_manager.list_facts()
+            notes = self.memory_manager.list_notes(only_active=True)
+            facts_len = len(facts) if isinstance(facts, (dict, list, tuple, set)) else 0
+            notes_len = len(notes) if isinstance(notes, (dict, list, tuple, set)) else 0
+            memory_count = facts_len + notes_len
+        except Exception as exc:
+            logger.debug("Ошибка подсчёта записей памяти для чипов: %s", exc)
+
+        monitor_label: str | None = None
+        dock_mgr = getattr(self.spotlight_bar, "dock_manager", None)
+        last_geom = getattr(dock_mgr, "last_geometry", None) if dock_mgr is not None else None
+        if (
+            last_geom is not None
+            and hasattr(last_geom, "monitor_index")
+            and hasattr(last_geom, "dpi_scale")
+        ):
+            dpi_pct = int(round(float(last_geom.dpi_scale) * 100))
+            monitor_label = f"Мон. {int(last_geom.monitor_index) + 1} · {dpi_pct}%"
+        else:
+            ui_cfg = self._load_ui_settings()
+            target_mon = str(ui_cfg.get("target_monitor", "auto")).strip()
+            monitor_label = "Авто" if target_mon.lower() == "auto" else f"Мон. {target_mon}"
+
+        is_muted = False
+        try:
+            if hasattr(self.tray_manager, "is_muted"):
+                is_muted = bool(self.tray_manager.is_muted())
+        except Exception:
+            is_muted = False
+
+        voice_active = bool(self.enable_voice) and not is_muted
+        voice_mode = "Голос" if voice_active else "Без звука"
+
+        try:
+            self.spotlight_bar.update_context_chips(
+                monitor_label=monitor_label,
+                memory_count=memory_count,
+                voice_mode=voice_mode,
+                voice_active=voice_active,
+            )
+        except Exception as exc:
+            logger.debug("Ошибка обновления контекстных чипов: %s", exc)
 
     def _on_agent_abort_requested(self) -> None:
         """Кнопка «Esc · Стоп» в AgentMiniBar: экстренно прерывает автономного агента."""
@@ -628,6 +725,7 @@ class GupkaCommanderApp(QObject):
 
             self._current_response_streamed = False
             self._audio_streamed = False
+            self._refresh_context_chips()
 
             return response_text
         finally:
@@ -1419,9 +1517,33 @@ class GupkaCommanderApp(QObject):
         """Открывает окно системных настроек GupkaCommander."""
         from gui.settings_dialog import SettingsDialog
 
+        prev_tts = str(getattr(self.voice_pipeline, "_tts_engine", "")).strip().lower()
         dialog = SettingsDialog(on_open_models=self.open_dependency_manager)
         dialog.exec()
         self._apply_ui_settings()
+
+        reload_fn = getattr(self.voice_pipeline, "reload_engines_from_settings", None)
+        if callable(reload_fn):
+            try:
+                reload_fn()
+            except Exception as exc:
+                logger.warning("Ошибка перезагрузки голосовых движков: %s", exc)
+
+        new_tts = str(getattr(self.voice_pipeline, "_tts_engine", "")).strip().lower()
+        if (
+            self.enable_llm_autostart
+            and new_tts in {"qwen3-tts", "qwen-tts", "qwen_tts"}
+            and new_tts != prev_tts
+        ):
+            tts_starter = getattr(self.llama_manager, "start_tts", None)
+            if callable(tts_starter):
+                threading.Thread(
+                    target=tts_starter,
+                    name="LlamaTTSAutostart",
+                    daemon=True,
+                ).start()
+
+        self._refresh_context_chips()
 
     def _start_llama_servers(self) -> None:
         """Запускает VLM (:8080) и Qwen3-TTS (:8081) под контролем VRAMBudgetGuard."""
@@ -1463,9 +1585,10 @@ class GupkaCommanderApp(QObject):
             except Exception as exc:
                 logger.warning("Не удалось запустить голосовой конвейер: %s", exc)
 
-        # 4. Отображение главного окна SpotlightBar
+        # 4. Отображение главного окна SpotlightBar и обновление контекстных чипов
         if not start_hidden:
             self.spotlight_bar.show_bar()
+        self._refresh_context_chips()
         logger.info("GupkaCommander успешно запущен и готов к работе.")
 
     def shutdown(self) -> None:

@@ -1,4 +1,10 @@
 {
+  "ui": {
+    "dock_position": "top",
+    "target_monitor": "auto",
+    "theme": "system",
+    "backdrop": "acrylic"
+  },
   "system": {
     "language": "ru",
     "hotkeys": {

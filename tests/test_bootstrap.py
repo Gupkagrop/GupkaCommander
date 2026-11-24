@@ -391,6 +391,20 @@ class TestDependencySetupDialogGUI:
         # При выборе VLM автоматически отмечается llama-server
         dialog.checkboxes["vlm_qwen"].setChecked(True)
         assert dialog.checkboxes["llama_server"].isChecked() is True
+
+        # Проверка QScrollArea и автовыбора llama_server при выборе Qwen3-TTS
+        from PySide6.QtWidgets import QFrame, QScrollArea
+
+        assert isinstance(dialog._scroll_area, QScrollArea)
+        assert dialog._scroll_area.widgetResizable() is True
+        assert dialog._scroll_area.frameShape() == QFrame.Shape.NoFrame
+        assert dialog._scroll_area.minimumHeight() == 240
+        assert dialog._scroll_area.maximumHeight() == 420
+
+        dialog.checkboxes["vlm_qwen"].setChecked(False)
+        dialog.checkboxes["llama_server"].setChecked(False)
+        dialog.checkboxes["qwen3_tts"].setChecked(True)
+        assert dialog.checkboxes["llama_server"].isChecked() is True
         dialog.close()
 
     def test_dialog_download_completion_updates_ui(

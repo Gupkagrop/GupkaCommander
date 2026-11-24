@@ -1,9 +1,10 @@
 """Диалог первичной настройки и загрузки зависимостей GupkaCommander.
 
 > [!NOTE]
-> **Назначение файла:** Графическое окно Windows 11 Fluent Dark (PySide6) для запроса
-> разрешения пользователя на скачивание локальных моделей (VAD, Piper TTS, Faster-Whisper,
-> Qwen2.5-VL) и сервера llama-server.exe при первом запуске .exe или из меню трея.
+> **Назначение файла:** Графическое окно Windows 11 Fluent 2 (PySide6) для запроса
+> разрешения пользователя на скачивание локальных моделей (Silero VAD, Piper TTS,
+> Faster-Whisper, GigaAM v3 ONNX, Qwen3-TTS, Qwen3.5-4B) и сервера llama-server.exe
+> при первом запуске .exe или из меню трея.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -35,64 +37,118 @@ from core.bootstrap import (
     format_size_ru,
 )
 from core.paths import get_icon_path
-from gui.styles import FLUENT_DARK_THEME, PALETTE
+from gui.theme_manager import ThemeManager, ThemeMode, ThemeTokens
 
 logger = logging.getLogger(__name__)
 
-DIALOG_EXTRA_STYLES = f"""
+
+def _build_setup_stylesheet(tokens: ThemeTokens) -> str:
+    """Формирует QSS для диалога загрузки зависимостей в стиле Fluent 2 + Sponge Ochre."""
+    return f"""
 QDialog#setupDialog {{
-    background-color: {PALETTE.background};
+    background-color: {tokens.background};
+    color: {tokens.text};
+    font-family: 'Segoe UI Variable Text', 'Segoe UI', 'Inter', sans-serif;
+}}
+QLabel {{
+    background: transparent;
+    border: none;
+    color: {tokens.text};
+}}
+QScrollArea#depsScrollArea,
+QWidget#depsScrollContainer {{
+    background: transparent;
+    border: none;
 }}
 QFrame#depCard {{
-    background-color: {PALETTE.surface};
-    border: 1px solid {PALETTE.border};
-    border-radius: 8px;
+    background-color: {tokens.surface_card};
+    border: 1px solid {tokens.border};
+    border-radius: 10px;
 }}
 QLabel#titleLabel {{
     font-size: 18px;
     font-weight: 600;
-    color: {PALETTE.text};
+    color: {tokens.text};
 }}
 QLabel#subtitleLabel {{
     font-size: 13px;
-    color: {PALETTE.secondary};
+    color: {tokens.text_secondary};
 }}
 QLabel#descLabel {{
     font-size: 12px;
-    color: {PALETTE.secondary};
+    color: {tokens.text_secondary};
 }}
 QLabel#statusInstalled {{
     font-size: 12px;
     font-weight: 600;
-    color: {PALETTE.success};
+    color: {tokens.success};
 }}
 QLabel#sizeBadge {{
     font-size: 12px;
     font-weight: 600;
-    color: {PALETTE.accent};
+    color: {tokens.sponge_ochre};
 }}
 QLabel#warningLabel {{
     font-size: 12px;
-    color: {PALETTE.error};
+    color: {tokens.danger};
 }}
 QLabel#storageLabel {{
     font-size: 11px;
-    color: {PALETTE.secondary};
+    color: {tokens.text_muted};
 }}
 QProgressBar#downloadProgress {{
-    background-color: {PALETTE.surface_secondary};
-    border: 1px solid {PALETTE.border};
+    background-color: {tokens.surface_chip};
+    border: 1px solid {tokens.border};
     border-radius: 5px;
     height: 10px;
     text-align: center;
 }}
 QProgressBar#downloadProgress::chunk {{
-    background-color: {PALETTE.accent};
+    background-color: {tokens.sponge_ochre};
     border-radius: 4px;
 }}
 QCheckBox {{
+    color: {tokens.text};
     spacing: 8px;
     font-weight: 500;
+}}
+QPushButton {{
+    background-color: {tokens.surface_chip};
+    color: {tokens.text};
+    border: 1px solid {tokens.border};
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-weight: 500;
+}}
+QPushButton:hover {{
+    background-color: {tokens.surface_chip_hover};
+}}
+QPushButton#accentButton {{
+    background-color: {tokens.sponge_ochre_soft};
+    color: {tokens.sponge_ochre};
+    border: 1px solid {tokens.sponge_ochre_border};
+    font-weight: 700;
+}}
+QPushButton#accentButton:hover {{
+    background-color: {tokens.sponge_ochre};
+    color: #1B1D22;
+}}
+QScrollBar:vertical {{
+    background: transparent;
+    width: 6px;
+    margin: 2px 0px 2px 0px;
+}}
+QScrollBar::handle:vertical {{
+    background: {tokens.scrollbar_handle};
+    border-radius: 3px;
+    min-height: 24px;
+}}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical,
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {{
+    background: transparent;
+    height: 0px;
 }}
 """
 
@@ -158,7 +214,8 @@ class DependencySetupDialog(QDialog):
         self.setWindowTitle("GupkaCommander — Загрузка компонентов")
         self.setMinimumWidth(560)
         self.setModal(True)
-        self.setStyleSheet(FLUENT_DARK_THEME + DIALOG_EXTRA_STYLES)
+        self._tokens: ThemeTokens = ThemeManager.resolve_tokens(ThemeMode.SYSTEM)
+        self.setStyleSheet(_build_setup_stylesheet(self._tokens))
 
         icon_path = get_icon_path()
         if icon_path.exists():
@@ -195,8 +252,26 @@ class DependencySetupDialog(QDialog):
         subtitle.setWordWrap(True)
         root.addWidget(subtitle)
 
+        scroll_area = QScrollArea(self)
+        scroll_area.setObjectName("depsScrollArea")
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setMinimumHeight(240)
+        scroll_area.setMaximumHeight(420)
+
+        cards_container = QWidget(scroll_area)
+        cards_container.setObjectName("depsScrollContainer")
+        cards_layout = QVBoxLayout(cards_container)
+        cards_layout.setContentsMargins(0, 0, 6, 0)
+        cards_layout.setSpacing(8)
         for item in self._report.items:
-            root.addWidget(self._create_item_card(item))
+            cards_layout.addWidget(self._create_item_card(item))
+        cards_layout.addStretch(1)
+
+        scroll_area.setWidget(cards_container)
+        self._scroll_area = scroll_area
+        root.addWidget(scroll_area, stretch=1)
 
         storage_text = (
             f"Папка моделей: {self._report.models_dir}  •  "
@@ -301,11 +376,13 @@ class DependencySetupDialog(QDialog):
         parent_layout.addLayout(btn_row)
 
     def _on_checkbox_changed(self, item_id: str) -> None:
-        """Обрабатывает переключение чекбокса и автовыбор llama-server при выборе VLM."""
-        if item_id == "vlm_qwen" and self._checkboxes["vlm_qwen"].isChecked():
-            llama_cb = self._checkboxes.get("llama_server")
-            if llama_cb is not None and llama_cb.isEnabled() and not llama_cb.isChecked():
-                llama_cb.setChecked(True)
+        """Обрабатывает переключение чекбокса и автовыбор llama-server для VLM или Qwen3-TTS."""
+        if item_id in {"vlm_qwen", "qwen3_tts"}:
+            cb = self._checkboxes.get(item_id)
+            if cb is not None and cb.isChecked():
+                llama_cb = self._checkboxes.get("llama_server")
+                if llama_cb is not None and llama_cb.isEnabled() and not llama_cb.isChecked():
+                    llama_cb.setChecked(True)
         self._refresh_selection_summary()
 
     def get_selected_missing_ids(self) -> list[str]:

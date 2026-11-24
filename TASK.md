@@ -6,8 +6,8 @@
 
 ## 1. Project Health & Stage
 - **Current Phase:** GupkaCommander 2.0 Release (Fluent 2 «Губка» Docked Blade UI, 3-Tier Router + ReAct CDP/UIA/SoM, Multi-Monitor Per-Monitor DPI v2, Memory v2 FTS5, GPU-стек Qwen3.5-4B / Qwen3-TTS / GigaAM v3 ONNX)
-- **Status:** Production-Grade Release 2.0 (756/756 Tests Green, 0 Ruff in 110 files, 0 Mypy Strict in 102 files)
-- **Last Updated:** 2026-11-24 19:38
+- **Status:** Production-Grade Release 2.0 (763/763 Tests Green, 0 Ruff in 110 files, 0 Mypy Strict in 102 files)
+- **Last Updated:** 2026-11-24 20:05
 - **Active Branch:** `main`
 
 ## 2. Completed Milestones
@@ -66,10 +66,17 @@
   2. Обновлён `GupkaCommander.spec` для сбора всех новых v2-модулей (`core.agent`, `core.browser`, `core.vision`, `gui.theme_manager`, `gui.dock_manager`, `gui.sponge_pore_widget`, `gui.agent_widgets`, `onnxruntime`).
   3. Написаны тесты `tests/test_v2_main_wiring.py`; полный quality gate пройден без ошибок (`ruff`: 0 в 110 файлах, `mypy`: 0 в 102 файлах, `pytest`: **756/756 passed** за 25.22 с).
   4. Пересобран автономный `dist/GupkaCommander/GupkaCommander.exe` (**70.75 MB**, пакет **898.71 MB**) и подтверждён headless smoke-test (`ExitCode == 0`, свежая запись в `%LOCALAPPDATA%\GupkaCommander\logs\gupka.log`).
+- [x] **2026-11-24 Финальная доводка GupkaCommander 2.0 (закрытие 6 пробелов v2.0.0 и портативный ZIP):**
+  1. `main.py` и `core/voice/voice_pipeline.py`: проброс `audio_level_received` в `SpotlightBar.set_audio_level` (пульсация `SpongePoreWidget` + `WaveformWidget`) с fallback для моков; автосохранение `dock_position_changed` в `settings.json` (под защитой `_applying_ui_settings`); обновление живых чипов `_refresh_context_chips()` в `start()`, `execute_command()` и `open_settings_dialog()`; метод `VoicePipeline.reload_engines_from_settings()` и фоновый `start_tts()` при переключении на `qwen3-tts`.
+  2. `gui/setup_dialog.py` и `gui/theme_manager.py`: добавлен `ThemeManager.resolve_tokens()`, обёртка `QScrollArea` для карточек зависимостей (`240–420 px`), палитра Fluent 2 + Sponge Ochre и автовыбор `llama_server` при выборе `vlm_qwen` или `qwen3_tts`.
+  3. `core/brain/llama_manager.py`: приоритет v2 `Qwen3.5-4B-Q4_K_M` в `find_model_paths()` с graceful fallback на legacy v1 `qwen3-vl-4b-instruct-q4_k_m`.
+  4. `config/settings.json` и `gui/settings_dialog.py`: явный блок `"ui"` и `context_window: 8192` в `_default_settings()`.
+  5. Упаковка v2.0.0 (`scripts/installer.iss`, `scripts/build_installer.py`, `scripts/build_executable.py`): версия `"2.0.0"`, инсталлятор `GupkaCommander-Setup-v2.0.0.exe` и генерация портативного архива `dist/GupkaCommander-v2.0.0-win64-portable.zip` (**357.59 MB**).
+  6. Верификация и сборка: `ruff` (0 в 110 файлах), `mypy` (0 в 102 файлах), `pytest` (**763/763 passed**), пересобран `GupkaCommander.exe` (**70.75 MB**), headless smoke-test пройден (`ExitCode == 0`).
 
 ## 3. Active Task (Current Focus)
 - **Feature:** Релиз GupkaCommander 2.0 — Fluent 2 «Губка», ReAct CDP/UIA/SoM и GPU-стек 2026.
-- **Status:** Все фазы объединены и связаны в `main`; 756/756 тестов зелёные (100%), 0 ошибок `mypy` в 102 файлах, 0 ошибок `ruff` в 110 файлах; `GupkaCommander.exe` (70.75 MB, пакет 898.71 MB) успешно прошёл headless smoke-test.
+- **Status:** Все фазы и финальные доводки объединены в `main`; 763/763 тестов зелёные (100%), 0 ошибок `mypy` в 102 файлах, 0 ошибок `ruff` в 110 файлах; `GupkaCommander.exe` (70.75 MB) и `GupkaCommander-v2.0.0-win64-portable.zip` (357.59 MB) собраны и подтверждены headless smoke-тестом.
 - **Verification Plan:** Завершено. Опубликовано в `origin/main`.
 
 ## 4. Next Immediate Steps (Backlog)
@@ -92,4 +99,4 @@
   - `2026-11-20`: Двухуровневый инсталлятор Inno Setup (`scripts/installer.iss`): по умолчанию без UAC в AppData с диалогом выбора Program Files.
   - `2026-11-20`: Комплексный харденинг `ShellExecutor` против обфускации backtick, `-EncodedCommand`, Base64 и деструктивных операций файловой системы.
 - **Known Blockers / Warnings:**
-  - Нет блокеров. Релиз GupkaCommander 2.0 завершён, собран и протестирован (756/756 тестов зелёные).
+  - Нет блокеров. Релиз GupkaCommander 2.0 завершён, собран и протестирован (763/763 тестов зелёные).

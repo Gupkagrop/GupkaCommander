@@ -40,6 +40,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL_FILENAME = VLM_MODEL_FILENAME
 DEFAULT_MMPROJ_FILENAME = VLM_MMPROJ_FILENAME
 DEFAULT_MMPROJ_ALT_FILENAME = "mmproj-F16.gguf"
+LEGACY_V1_MODEL_FILENAME = "qwen3-vl-4b-instruct-q4_k_m.gguf"
+LEGACY_V1_MMPROJ_FILENAME = "mmproj-qwen3-vl-4b-instruct-q8_0.gguf"
 DEFAULT_TTS_MODEL_FILENAME = QWEN_TTS_MODEL_FILENAME
 DEFAULT_TTS_MMPROJ_FILENAME = QWEN_TTS_MMPROJ_FILENAME
 
@@ -236,21 +238,50 @@ class LlamaServerManager:
         """Находит исполняемый файл llama-server.exe."""
         return self._dep_manager.find_llama_server()
 
-    def find_model_paths(self) -> tuple[Path | None, Path | None]:
-        """Возвращает пути к основной GGUF-модели VLM и проектору mmproj (если найдены)."""
-        llm_dir = self.models_dir / "llm"
-        model_path = llm_dir / DEFAULT_MODEL_FILENAME
-        mmproj_path = llm_dir / DEFAULT_MMPROJ_FILENAME
-        mmproj_alt_path = llm_dir / DEFAULT_MMPROJ_ALT_FILENAME
+    @staticmethod
+    def _first_valid_file(
+        base_dir: Path,
+        filenames: tuple[str, ...],
+        min_bytes: int,
+    ) -> Path | None:
+        """Возвращает первый существующий валидный файл из списка кандидатов."""
+        for name in filenames:
+            candidate = base_dir / name
+            if _is_valid_file(candidate, min_bytes):
+                return candidate
+        return None
 
-        found_model = model_path if _is_valid_file(model_path, MIN_VLM_BYTES) else None
-        if _is_valid_file(mmproj_path, MIN_VLM_BYTES):
-            found_mmproj: Path | None = mmproj_path
-        elif _is_valid_file(mmproj_alt_path, MIN_VLM_BYTES):
-            found_mmproj = mmproj_alt_path
-        else:
-            found_mmproj = None
-        return found_model, found_mmproj
+    def find_model_paths(self) -> tuple[Path | None, Path | None]:
+        """Возвращает пути к GGUF-модели VLM и mmproj (v2 с откатом на legacy v1)."""
+        llm_dir = self.models_dir / "llm"
+
+        # 1. Основной путь v2: Qwen3.5-4B-Q4_K_M + mmproj-qwen3.5-4b-f16 / mmproj-F16
+        v2_model = llm_dir / DEFAULT_MODEL_FILENAME
+        if _is_valid_file(v2_model, MIN_VLM_BYTES):
+            v2_mmproj = self._first_valid_file(
+                llm_dir,
+                (DEFAULT_MMPROJ_FILENAME, DEFAULT_MMPROJ_ALT_FILENAME),
+                MIN_VLM_BYTES,
+            )
+            return v2_model, v2_mmproj
+
+        # 2. Graceful fallback на legacy v1: qwen3-vl-4b-instruct-q4_k_m
+        v1_model = llm_dir / LEGACY_V1_MODEL_FILENAME
+        if _is_valid_file(v1_model, MIN_VLM_BYTES):
+            v1_mmproj = self._first_valid_file(
+                llm_dir,
+                (LEGACY_V1_MMPROJ_FILENAME,),
+                MIN_VLM_BYTES,
+            )
+            return v1_model, v1_mmproj
+
+        # Если основная модель не найдена, проверяем наличие любого mmproj для диагностики
+        any_mmproj = self._first_valid_file(
+            llm_dir,
+            (DEFAULT_MMPROJ_FILENAME, DEFAULT_MMPROJ_ALT_FILENAME, LEGACY_V1_MMPROJ_FILENAME),
+            MIN_VLM_BYTES,
+        )
+        return None, any_mmproj
 
     def find_tts_model_paths(self) -> tuple[Path | None, Path | None]:
         """Возвращает пути к GGUF-модели Qwen3-TTS и её mmproj-проектору."""

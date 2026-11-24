@@ -320,3 +320,184 @@ def test_autostart_llama_and_voice_from_settings(qapp: QApplication, tmp_path: P
             assert called_event.wait(timeout=2.0)
         finally:
             app.shutdown()
+
+
+def test_audio_level_updates_sponge_pore_and_waveform_and_mock_fallback(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """Сигнал audio_level_received обновляет SpotlightBar (SpongePore + Waveform) и fallback."""
+    app, _, _, _, _ = _build_app(qapp, tmp_path)
+    try:
+        with patch.object(
+            app.spotlight_bar, "set_audio_level", wraps=app.spotlight_bar.set_audio_level
+        ) as spy_bar:
+            app.voice_bridge.audio_level_received.emit(0.75)
+            spy_bar.assert_called_once_with(0.75)
+        assert app.spotlight_bar.waveform._target_level == pytest.approx(0.75)
+        assert app.spotlight_bar.sponge_pore._target_audio_level == pytest.approx(0.75)
+    finally:
+        app.shutdown()
+
+    # Проверка fallback для mock spotlight_bar (не isinstance SpotlightBar)
+    mock_bar = MagicMock()
+    mock_bar.waveform = MagicMock()
+    mock_app = GupkaCommanderApp(
+        app=qapp,
+        app_finder=MagicMock(spec=AppFinder),
+        os_controller=MagicMock(spec=OSController),
+        voice_pipeline=MagicMock(spec=VoicePipeline),
+        spotlight_bar=mock_bar,
+        tray_manager=TrayManager(),
+        hotkey_manager=HotkeyManager(),
+        llm_client=MagicMock(spec=LocalLLMClient),
+        failsafe_monitor=MagicMock(spec=FailSafeMonitor),
+        memory_manager=MemoryManager(db_path=tmp_path / "mock_audio.db"),
+        enable_voice=False,
+        enable_hotkey=False,
+        enable_tray=False,
+    )
+    try:
+        mock_app.voice_bridge.audio_level_received.emit(0.55)
+        mock_bar.waveform.set_audio_level.assert_called_once_with(0.55)
+    finally:
+        mock_app.shutdown()
+
+
+def test_dock_position_changed_persists_settings_preserving_other_keys(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """dock_position_changed сохраняет ui.dock_position без затирания остальных ключей."""
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "system": {"language": "ru"},
+                "ui": {"dock_position": "top", "theme": "dark"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("main.get_config_path", return_value=settings_file):
+        app, _, _, _, _ = _build_app(qapp, tmp_path)
+        try:
+            # При старте _applying_ui_settings не должен лишний раз перезаписывать файл
+            app.spotlight_bar.set_dock_position(DockPosition.BOTTOM_RIGHT)
+            saved = json.loads(settings_file.read_text(encoding="utf-8"))
+            assert saved["ui"]["dock_position"] == "bottom_right"
+            assert saved["ui"]["theme"] == "dark"
+            assert saved["system"]["language"] == "ru"
+
+            # Во время _apply_ui_settings запись блокируется флагом _applying_ui_settings
+            settings_file.write_text(
+                json.dumps({"system": {"language": "ru"}, "ui": {"dock_position": "left"}}),
+                encoding="utf-8",
+            )
+            with patch.object(
+                app, "_on_dock_position_changed", wraps=app._on_dock_position_changed
+            ):
+                app._apply_ui_settings()
+                assert app.spotlight_bar.dock_position == DockPosition.LEFT
+                assert (
+                    json.loads(settings_file.read_text(encoding="utf-8"))["ui"]["dock_position"]
+                    == "left"
+                )
+        finally:
+            app.shutdown()
+
+
+def test_context_chips_refresh_in_start_and_execute_command(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """start() и execute_command() обновляют живые счётчики памяти и голоса в ContextChipBar."""
+    app, _, _, _, memory = _build_app(qapp, tmp_path)
+    try:
+        memory.set_fact("имя", "Денис")
+        memory.add_note("проверить сборку")
+        app.start(start_hidden=True)
+
+        mem_btn = app.spotlight_bar.context_chip_bar.get_chip_button("memory")
+        voice_btn = app.spotlight_bar.context_chip_bar.get_chip_button("voice")
+        assert mem_btn is not None and mem_btn.text() == "Память: 2"
+        assert voice_btn is not None and voice_btn.text() == "Без звука"
+
+        app.execute_command("запомни, что город это Казань")
+        assert mem_btn.text() == "Память: 3"
+    finally:
+        app.shutdown()
+
+
+def test_open_settings_dialog_reloads_voice_engines_and_starts_tts(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """open_settings_dialog() перечитывает движки и запускает start_tts() для qwen3-tts."""
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "ui": {"dock_position": "top"},
+                "models": {
+                    "stt": {"engine": "faster-whisper"},
+                    "tts": {"engine": "piper", "port": 8081},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    pipeline = VoicePipeline.from_settings(settings_path=settings_file)
+    tts_started = threading.Event()
+    mock_llama = MagicMock(spec=LlamaServerManager)
+
+    def _mark_tts_started() -> bool:
+        tts_started.set()
+        return True
+
+    mock_llama.start_tts.side_effect = _mark_tts_started
+
+    with patch("main.get_config_path", return_value=settings_file):
+        app = GupkaCommanderApp(
+            app=qapp,
+            app_finder=MagicMock(spec=AppFinder),
+            os_controller=MagicMock(spec=OSController),
+            voice_pipeline=pipeline,
+            spotlight_bar=SpotlightBar(hide_on_focus_loss=False),
+            tray_manager=TrayManager(),
+            hotkey_manager=HotkeyManager(),
+            llm_client=MagicMock(spec=LocalLLMClient),
+            failsafe_monitor=MagicMock(spec=FailSafeMonitor),
+            memory_manager=MemoryManager(db_path=tmp_path / "settings_reload.db"),
+            llama_manager=mock_llama,
+            enable_voice=False,
+            enable_hotkey=False,
+            enable_tray=False,
+            enable_llm_autostart=True,
+        )
+        try:
+
+            def _fake_exec() -> int:
+                settings_file.write_text(
+                    json.dumps(
+                        {
+                            "ui": {"dock_position": "top"},
+                            "models": {
+                                "stt": {"engine": "gigaam-v3"},
+                                "tts": {"engine": "qwen3-tts", "port": 8081},
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return 1
+
+            fake_dialog = MagicMock()
+            fake_dialog.exec.side_effect = _fake_exec
+            with patch("gui.settings_dialog.SettingsDialog", return_value=fake_dialog):
+                app.open_settings_dialog()
+
+            assert pipeline._stt_engine == "gigaam-v3"
+            assert pipeline._tts_engine == "qwen3-tts"
+            assert tts_started.wait(timeout=2.0)
+            mock_llama.start_tts.assert_called_once()
+        finally:
+            app.shutdown()

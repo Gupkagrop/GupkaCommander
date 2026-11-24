@@ -40,10 +40,13 @@ from core.bootstrap import (
     _select_llama_asset,
 )
 from core.brain.llama_manager import (
+    DEFAULT_MMPROJ_ALT_FILENAME,
     DEFAULT_MMPROJ_FILENAME,
     DEFAULT_MODEL_FILENAME,
     DEFAULT_TTS_MMPROJ_FILENAME,
     DEFAULT_TTS_MODEL_FILENAME,
+    LEGACY_V1_MMPROJ_FILENAME,
+    LEGACY_V1_MODEL_FILENAME,
     LlamaServerManager,
     VRAMBudgetGuard,
     VRAMStatus,
@@ -428,6 +431,31 @@ class TestLlamaServerManagerDualGPU:
             assert mgr_low.is_running_managed() is True
             assert mgr_low.is_tts_running_managed() is False
 
+    def test_find_model_paths_v2_priority_and_legacy_v1_fallback(self, tmp_path: Path) -> None:
+        """Проверяет приоритет v2 Qwen3.5-4B и откат на legacy v1 в find_model_paths."""
+        llm_dir = tmp_path / "models" / "llm"
+        llm_dir.mkdir(parents=True)
+
+        v1_model = llm_dir / LEGACY_V1_MODEL_FILENAME
+        v1_mmproj = llm_dir / LEGACY_V1_MMPROJ_FILENAME
+        v1_model.write_bytes(b"v1-model")
+        v1_mmproj.write_bytes(b"v1-mmproj")
+
+        mgr = LlamaServerManager(models_dir=tmp_path / "models")
+        with patch("core.brain.llama_manager.MIN_VLM_BYTES", 1):
+            found_m, found_p = mgr.find_model_paths()
+            assert found_m == v1_model
+            assert found_p == v1_mmproj
+
+            v2_model = llm_dir / DEFAULT_MODEL_FILENAME
+            v2_alt_mmproj = llm_dir / DEFAULT_MMPROJ_ALT_FILENAME
+            v2_model.write_bytes(b"v2-model")
+            v2_alt_mmproj.write_bytes(b"v2-mmproj")
+
+            found_m2, found_p2 = mgr.find_model_paths()
+            assert found_m2 == v2_model
+            assert found_p2 == v2_alt_mmproj
+
 
 class TestVoicePipelineAndBootstrapV2:
     """Тесты выбора новых движков в VoicePipeline и спецификаций bootstrap/download."""
@@ -512,3 +540,46 @@ class TestVoicePipelineAndBootstrapV2:
             assert len(tts_paths) == 2
             assert len(gigaam_paths) == 2
             assert mock_dl.call_count == 4
+
+    def test_voice_pipeline_reload_engines_from_settings(self, tmp_path: Path) -> None:
+        """reload_engines_from_settings останавливает старый TTS и сбрасывает ленивые движки."""
+        from core.voice.gigaam_transcriber import GigaAMOnnxTranscriber
+        from core.voice.qwen_tts_synthesizer import QwenTTSSynthesizer
+        from core.voice.synthesizer import PiperSynthesizer
+        from core.voice.transcriber import FasterWhisperTranscriber
+
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(
+            json.dumps(
+                {
+                    "models": {
+                        "stt": {"engine": "faster-whisper"},
+                        "tts": {"engine": "piper", "port": 8081},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        pipeline = VoicePipeline.from_settings(settings_path=settings_file)
+        assert isinstance(pipeline.transcriber, FasterWhisperTranscriber)
+        old_synth = pipeline.synthesizer
+        assert isinstance(old_synth, PiperSynthesizer)
+
+        settings_file.write_text(
+            json.dumps(
+                {
+                    "models": {
+                        "stt": {"engine": "gigaam-v3"},
+                        "tts": {"engine": "qwen3-tts", "port": 8092},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch.object(old_synth, "stop", wraps=old_synth.stop) as spy_stop:
+            pipeline.reload_engines_from_settings()
+            spy_stop.assert_called_once()
+
+        assert isinstance(pipeline.transcriber, GigaAMOnnxTranscriber)
+        assert isinstance(pipeline.synthesizer, QwenTTSSynthesizer)
+        assert pipeline.synthesizer.base_url == "http://127.0.0.1:8092"

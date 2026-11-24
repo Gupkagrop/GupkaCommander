@@ -290,13 +290,19 @@ class ThemeManager(QObject):
         """Принудительно перечитывает системную тему и обновляет токены."""
         return self._apply_resolved_tokens()
 
+    @classmethod
+    def resolve_tokens(cls, mode: ThemeMode | str = ThemeMode.SYSTEM) -> ThemeTokens:
+        """Возвращает дизайн-токены Dark/Light для заданного режима темы без создания экземпляра."""
+        coerced = mode if isinstance(mode, ThemeMode) else ThemeMode(mode.strip().lower())
+        if coerced == ThemeMode.DARK:
+            return DARK_TOKENS
+        if coerced == ThemeMode.LIGHT:
+            return LIGHT_TOKENS
+        return DARK_TOKENS if cls._detect_system_dark() else LIGHT_TOKENS
+
     def _resolve_tokens(self) -> ThemeTokens:
         """Вычисляет ThemeTokens для текущего режима."""
-        if self._mode == ThemeMode.DARK:
-            return DARK_TOKENS
-        if self._mode == ThemeMode.LIGHT:
-            return LIGHT_TOKENS
-        return DARK_TOKENS if self._detect_system_dark() else LIGHT_TOKENS
+        return self.resolve_tokens(self._mode)
 
     @staticmethod
     def _detect_system_dark() -> bool:

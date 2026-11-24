@@ -195,7 +195,7 @@ def _default_settings() -> dict[str, Any]:
             "llm": {
                 "autostart": True,
                 "n_gpu_layers": 99,
-                "context_window": 4096,
+                "context_window": 8192,
             },
         },
     }

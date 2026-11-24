@@ -3,7 +3,7 @@
 
 Проверяет наличие компилятора Inno Setup (ISCC.exe) в системе,
 запускает сборку scripts/installer.iss и генерирует
-готовый дистрибутив dist/GupkaCommander-Setup-v0.1.0.exe.
+готовый дистрибутив dist/GupkaCommander-Setup-v2.0.0.exe.
 """
 
 import shutil
@@ -74,7 +74,7 @@ def build_installer() -> int:
         print(f"❌ Ошибка компиляции Inno Setup! Код: {result.returncode}")
         return result.returncode
 
-    setup_exe = project_root / "dist" / "GupkaCommander-Setup-v0.1.0.exe"
+    setup_exe = project_root / "dist" / "GupkaCommander-Setup-v2.0.0.exe"
     if not setup_exe.exists():
         print(f"❌ Файл инсталлятора не найден по пути: {setup_exe}")
         return 1

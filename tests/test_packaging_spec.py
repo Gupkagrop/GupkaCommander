@@ -9,9 +9,12 @@
 """
 
 import ast
+import json
+import zipfile
 from pathlib import Path
 
-from scripts.build_executable import get_dir_size_mb
+from gui.settings_dialog import _default_settings
+from scripts.build_executable import PORTABLE_ZIP_NAME, create_portable_zip, get_dir_size_mb
 from scripts.build_installer import find_iscc
 
 
@@ -93,3 +96,39 @@ def test_build_bat_exists() -> None:
     content = build_bat.read_text(encoding="utf-8")
     assert "scripts/build_executable.py" in content or "scripts\\build_executable.py" in content
     assert "scripts/build_installer.py" in content or "scripts\\build_installer.py" in content
+
+
+def test_v2_packaging_versions_settings_and_portable_zip(tmp_path: Path) -> None:
+    """Проверяет версию v2.0.0, блок ui в settings.json, context_window 8192 и создание ZIP."""
+    project_root = Path(__file__).resolve().parent.parent
+
+    iss_text = (project_root / "scripts" / "installer.iss").read_text(encoding="utf-8")
+    assert '#define MyAppVersion "2.0.0"' in iss_text
+
+    installer_py = (project_root / "scripts" / "build_installer.py").read_text(encoding="utf-8")
+    assert "GupkaCommander-Setup-v2.0.0.exe" in installer_py
+
+    settings_data = json.loads(
+        (project_root / "config" / "settings.json").read_text(encoding="utf-8")
+    )
+    assert settings_data["ui"] == {
+        "dock_position": "top",
+        "target_monitor": "auto",
+        "theme": "system",
+        "backdrop": "acrylic",
+    }
+    assert _default_settings()["models"]["llm"]["context_window"] == 8192
+
+    fake_dist = tmp_path / "GupkaCommander"
+    fake_dist.mkdir()
+    (fake_dist / "GupkaCommander.exe").write_bytes(b"MZ")
+    (fake_dist / "_internal").mkdir()
+    (fake_dist / "_internal" / "data.txt").write_text("ok", encoding="utf-8")
+
+    zip_path = create_portable_zip(fake_dist)
+    assert zip_path.name == PORTABLE_ZIP_NAME
+    assert zip_path.exists()
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        names = set(zf.namelist())
+        assert "GupkaCommander/GupkaCommander.exe" in names
+        assert "GupkaCommander/_internal/data.txt" in names
