@@ -242,7 +242,7 @@ class TestVector3LLMContextInjectionAndHistory:
             patch.object(app.llm_client, "is_healthy", return_value=True),
             patch.object(app.llm_client, "plan_actions", side_effect=mock_plan_actions),
         ):
-            app.execute_command("Какая погода на улице?")
+            app.execute_command("Открой браузер и проверь погоду на улице")
 
         assert len(captured_planner_prompts) > 0
         planner_prompt = captured_planner_prompts[0]

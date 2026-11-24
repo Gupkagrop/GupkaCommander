@@ -23,6 +23,7 @@ from PySide6.QtWidgets import QApplication
 from core.app_finder import AppFinder, AppInfo
 from core.brain.llm_client import LocalLLMClient
 from core.failsafe import FailSafeMonitor
+from core.memory import MemoryManager
 from core.os_controller import OSController
 from core.uia import UIAutomationManager
 from core.vision.vision_agent import VisionAgent
@@ -428,7 +429,9 @@ class TestGupkaCommanderAppUIAutomation:
 class TestGupkaCommanderAppStreamingCognitive:
     """Тестирование потоковой интеграции когнитивного ядра и TTS в GupkaCommanderApp."""
 
-    def test_execute_command_ai_cognitive_streaming(self, qapp: QApplication) -> None:
+    def test_execute_command_ai_cognitive_streaming(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
         """Проверка потоковой генерации токенов, обновления ChatDrawer и вызова speak_stream."""
         mock_llm = MagicMock(spec=LocalLLMClient)
         mock_llm.is_healthy.return_value = True
@@ -449,6 +452,7 @@ class TestGupkaCommanderAppStreamingCognitive:
             llm_client=mock_llm,
             voice_pipeline=mock_pipeline,
             failsafe_monitor=mock_failsafe,
+            memory_manager=MemoryManager(db_path=tmp_path / "memory.db"),
             enable_voice=True,
             enable_hotkey=False,
             enable_tray=False,

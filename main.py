@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import argparse
+import inspect
+import json
 import logging
 import os
 import queue
@@ -26,15 +28,20 @@ from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
+from core.agent.react_loop import AgentStepEvent, ReActEngine
+from core.agent.step_verifier import StepVerifier
+from core.agent.tool_registry import ToolRegistry
 from core.app_finder import AppFinder
 from core.brain.llama_manager import LlamaServerManager
 from core.brain.llm_client import LocalLLMClient
+from core.browser.cdp_bridge import BrowserCDPBridge
 from core.failsafe import FailSafeMonitor, get_failsafe_monitor
 from core.memory import MemoryManager
 from core.os_controller import DangerousCommandError, OSController
-from core.paths import get_database_path, get_icon_path, get_logs_dir
-from core.routing.intent_router import Intent, IntentRouter, RouteResult
+from core.paths import get_config_path, get_database_path, get_icon_path, get_logs_dir
+from core.routing.intent_router import ExecutionTier, Intent, IntentRouter, RouteResult
 from core.uia import UIAutomationManager
+from core.vision.som_annotator import SoMAnnotator
 from core.vision.vision_agent import ActionFailedError, VisionAgent
 from core.voice.sentence_streamer import SentenceAccumulator
 from core.voice.voice_pipeline import PipelineState, VoicePipeline
@@ -96,6 +103,8 @@ class VoiceBridge(QObject):
     stream_card_started = Signal()
     stream_chunk_received = Signal(str)
     stream_card_finished = Signal(str)
+    agent_step_received = Signal(object)
+    agent_progress_changed = Signal(bool, int, int, str, str)
 
 
 class CommandWorker(QThread):
@@ -147,6 +156,11 @@ class GupkaCommanderApp(QObject):
         failsafe_monitor: FailSafeMonitor | None = None,
         memory_manager: MemoryManager | None = None,
         llama_manager: LlamaServerManager | None = None,
+        browser_bridge: BrowserCDPBridge | None = None,
+        som_annotator: SoMAnnotator | None = None,
+        tool_registry: ToolRegistry | None = None,
+        step_verifier: StepVerifier | None = None,
+        react_engine: ReActEngine | None = None,
         enable_voice: bool = True,
         enable_hotkey: bool = True,
         enable_tray: bool = True,
@@ -170,6 +184,12 @@ class GupkaCommanderApp(QObject):
             uia_manager: Менеджер Microsoft UI Automation.
             failsafe_monitor: Монитор безопасности FailSafe для прерывания операций по Esc.
             memory_manager: Менеджер долговременной памяти SQLite.
+            llama_manager: Менеджер локальных серверов llama-server (:8080 VLM, :8081 TTS).
+            browser_bridge: Лёгкий мост Chrome/Edge DevTools Protocol.
+            som_annotator: Set-of-Mark аннотатор скриншотов.
+            tool_registry: Реестр инструментов автономного агента.
+            step_verifier: Верификатор шагов ReAct (anti-loop, FailSafe).
+            react_engine: Автономный ReAct-движок компьютерного управления.
             enable_voice: Флаг активации голосового конвейера.
             enable_hotkey: Флаг активации глобального хоткея Alt+Space.
             enable_tray: Флаг отображения системного трея.
@@ -195,11 +215,17 @@ class GupkaCommanderApp(QObject):
             db_path=get_database_path("memory.db")
         )
         self.llama_manager = llama_manager or LlamaServerManager()
+        self.browser_bridge = browser_bridge or BrowserCDPBridge()
+        self.som_annotator = som_annotator or SoMAnnotator()
+        self.tool_registry: ToolRegistry | None = tool_registry
+        self.step_verifier: StepVerifier | None = step_verifier
+        self.react_engine: ReActEngine | None = react_engine
         self.enable_llm_autostart = enable_llm_autostart
         self._async_execution: bool = async_execution
         self._command_worker: CommandWorker | None = None
         self._active_stream_card: Any | None = None
         self._stream_ui_tokens: list[str] = []
+        self._agent_step_cards: dict[int, Any] = {}
         self._current_response_streamed: bool = False
         self._audio_streamed: bool = False
         self._is_shutting_down: bool = False
@@ -209,7 +235,7 @@ class GupkaCommanderApp(QObject):
 
         # 3. Голосовой конвейер (с подавлением акустического эха при воспроизведении TTS)
         self.enable_voice = enable_voice
-        self.voice_pipeline = voice_pipeline or VoicePipeline(
+        self.voice_pipeline = voice_pipeline or VoicePipeline.from_settings(
             on_transcription=self._on_voice_transcription,
             on_state_changed=self._on_voice_state_changed,
             on_audio_level=self._on_audio_level,
@@ -225,6 +251,81 @@ class GupkaCommanderApp(QObject):
         self.enable_tray = enable_tray
 
         self._connect_signals()
+        self._apply_ui_settings()
+        self._ensure_react_engine()
+
+    def _ensure_react_engine(self) -> ReActEngine | None:
+        """Лениво собирает ToolRegistry, StepVerifier и ReActEngine из зависимостей приложения."""
+        if self.react_engine is not None:
+            return self.react_engine
+        try:
+            if self.tool_registry is None:
+                self.tool_registry = ToolRegistry(
+                    os_controller=self.os_controller,
+                    app_finder=self.app_finder,
+                    uia_manager=self.uia_manager,
+                    browser_bridge=self.browser_bridge,
+                    vision_agent=self.vision_agent,
+                    som_annotator=self.som_annotator,
+                    memory_manager=self.memory_manager,
+                    failsafe_monitor=self.failsafe_monitor,
+                )
+            if self.step_verifier is None:
+                self.step_verifier = StepVerifier(
+                    uia_manager=self.uia_manager,
+                    browser_bridge=self.browser_bridge,
+                    som_annotator=self.som_annotator,
+                    failsafe_monitor=self.failsafe_monitor,
+                )
+            self.react_engine = ReActEngine(
+                llm_client=self.llm_client,
+                tool_registry=self.tool_registry,
+                step_verifier=self.step_verifier,
+                memory_manager=self.memory_manager,
+                browser_bridge=self.browser_bridge,
+                uia_manager=self.uia_manager,
+                som_annotator=self.som_annotator,
+                failsafe_monitor=self.failsafe_monitor,
+            )
+        except Exception as exc:
+            logger.warning("Не удалось инициализировать ReActEngine: %s", exc)
+            self.react_engine = None
+        return self.react_engine
+
+    @staticmethod
+    def _load_ui_settings() -> dict[str, Any]:
+        """Безопасно читает секцию `ui` из config/settings.json."""
+        try:
+            path = get_config_path("settings.json")
+            if not path.is_file():
+                return {}
+            data = json.loads(path.read_text(encoding="utf-8"))
+            ui_cfg = data.get("ui", {}) if isinstance(data, dict) else {}
+            return ui_cfg if isinstance(ui_cfg, dict) else {}
+        except Exception as exc:
+            logger.debug("Ошибка чтения настроек интерфейса: %s", exc)
+            return {}
+
+    def _apply_ui_settings(self) -> None:
+        """Применяет докинг, монитор, тему и backdrop из settings.json к SpotlightBar."""
+        ui_cfg = self._load_ui_settings()
+        if not ui_cfg:
+            return
+        bar = self.spotlight_bar
+        setters: tuple[tuple[str, str], ...] = (
+            ("set_theme_mode", "theme"),
+            ("set_backdrop_type", "backdrop"),
+            ("set_target_monitor", "target_monitor"),
+            ("set_dock_position", "dock_position"),
+        )
+        for method_name, key in setters:
+            value = ui_cfg.get(key)
+            if value is None or not hasattr(bar, method_name):
+                continue
+            try:
+                getattr(bar, method_name)(value)
+            except Exception as exc:
+                logger.debug("Не удалось применить ui.%s=%r: %s", key, value, exc)
 
     @property
     def spotlight(self) -> SpotlightBar:
@@ -243,9 +344,13 @@ class GupkaCommanderApp(QObject):
         self.voice_bridge.stream_card_started.connect(self._ui_begin_stream_card)
         self.voice_bridge.stream_chunk_received.connect(self._ui_on_stream_chunk)
         self.voice_bridge.stream_card_finished.connect(self._ui_finish_stream_card)
+        self.voice_bridge.agent_step_received.connect(self._ui_on_agent_step)
+        self.voice_bridge.agent_progress_changed.connect(self._ui_on_agent_progress)
 
         # SpotlightBar -> Выполнение команд и быстрые действия панели
         self.spotlight_bar.command_submitted.connect(self._handle_submitted_command)
+        if hasattr(self.spotlight_bar, "abort_requested"):
+            self.spotlight_bar.abort_requested.connect(self._on_agent_abort_requested)
         if hasattr(self.spotlight_bar, "mute_toggled_requested"):
             self.spotlight_bar.mute_toggled_requested.connect(self._on_spotlight_mute_toggled)
         if hasattr(self.spotlight_bar, "settings_requested"):
@@ -265,6 +370,59 @@ class GupkaCommanderApp(QObject):
 
         # Корректное завершение при закрытии приложения
         self._app.aboutToQuit.connect(self.shutdown)
+
+    def _on_agent_abort_requested(self) -> None:
+        """Кнопка «Esc · Стоп» в AgentMiniBar: экстренно прерывает автономного агента."""
+        try:
+            self.failsafe_monitor.trigger_abort("UI stop button")
+        except Exception as exc:
+            logger.warning("Не удалось инициировать прерывание из UI: %s", exc)
+
+    def _ui_on_agent_step(self, event: object) -> None:
+        """Слот главного потока: отображает StepCard шага ReAct в ChatDrawer."""
+        if not isinstance(event, AgentStepEvent):
+            return
+        drawer = getattr(self.spotlight_bar, "chat_drawer", None)
+        if callable(drawer):
+            drawer = drawer()
+        if drawer is None or not hasattr(drawer, "add_step_card"):
+            return
+        existing = self._agent_step_cards.get(event.step_index)
+        if existing is not None and hasattr(existing, "update_status"):
+            existing.update_status(
+                str(event.status), duration_ms=int(event.duration_ms), details=event.detail
+            )
+            return
+        self._agent_step_cards[event.step_index] = drawer.add_step_card(
+            step_index=event.step_index,
+            title=event.title,
+            engine=str(event.engine),
+            status=str(event.status),
+            duration_ms=int(event.duration_ms),
+            detail=event.detail,
+        )
+
+    def _ui_on_agent_progress(
+        self, active: bool, step_index: int, max_steps: int, title: str, engine: str
+    ) -> None:
+        """Слот главного потока: переключает SpotlightBar между Deck и AgentMiniBar."""
+        if not hasattr(self.spotlight_bar, "set_agent_progress"):
+            return
+        try:
+            self.spotlight_bar.set_agent_progress(active, step_index, max_steps, title, engine)
+        except Exception as exc:
+            logger.debug("Ошибка обновления AgentMiniBar: %s", exc)
+
+    def _emit_agent_step(self, event: AgentStepEvent) -> None:
+        """Потокобезопасная доставка события шага ReAct в GUI (карточка и мини-бар)."""
+        self.voice_bridge.agent_step_received.emit(event)
+        self.voice_bridge.agent_progress_changed.emit(
+            True, event.step_index, event.max_steps, event.title, str(event.engine)
+        )
+
+    def _emit_agent_inactive(self) -> None:
+        """Возвращает SpotlightBar из режима AgentMiniBar в полноценный Deck."""
+        self.voice_bridge.agent_progress_changed.emit(False, 0, 0, "", "")
 
     def _on_voice_transcription(self, text: str) -> None:
         """Коллбэк из фонового потока VoicePipeline при распознавании речи."""
@@ -489,6 +647,10 @@ class GupkaCommanderApp(QObject):
         """
         active_route = route or self.intent_router.route(text)
 
+        tier_result = self._dispatch_by_tier(text, active_route)
+        if tier_result is not None:
+            return tier_result
+
         if active_route.intent == Intent.VOLUME_CONTROL:
             return self._handle_volume_control(active_route)
 
@@ -517,6 +679,54 @@ class GupkaCommanderApp(QObject):
             return self._handle_ui_automation(active_route, text)
 
         return self._handle_ai_cognitive(text)
+
+    def _dispatch_by_tier(self, text: str, route: RouteResult) -> str | None:
+        """Обрабатывает уровни CASUAL_CHAT и AUTONOMOUS_AGENT; для FAST_PATH возвращает None."""
+        tier = getattr(route, "tier", ExecutionTier.FAST_PATH)
+        if tier == ExecutionTier.CASUAL_CHAT:
+            return self._handle_casual_chat(text)
+        if tier == ExecutionTier.AUTONOMOUS_AGENT:
+            return self._handle_autonomous_agent(text)
+        return None
+
+    def _handle_casual_chat(self, text: str) -> str:
+        """Чистый диалог с многоходовой историей без планирования инструментов."""
+        if not self.llm_client.is_healthy():
+            return self._handle_ai_cognitive(text)
+        raw_history = self.memory_manager.build_chat_messages(limit=8)
+        history: list[dict[str, str]] | None = None
+        if isinstance(raw_history, list):
+            if (
+                raw_history
+                and raw_history[-1].get("role") == "user"
+                and raw_history[-1].get("content") == text
+            ):
+                raw_history = raw_history[:-1]
+            history = raw_history or None
+        return self._stream_cognitive_response(text, history=history)
+
+    @staticmethod
+    def _accepts_kwarg(fn: Any, kwarg: str) -> bool:
+        """Проверяет, принимает ли вызываемый объект именованный аргумент `kwarg`."""
+        try:
+            sig = inspect.signature(fn)
+        except (TypeError, ValueError):
+            return True
+        return kwarg in sig.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+
+    def _handle_autonomous_agent(self, text: str) -> str:
+        """Запускает ReActEngine с живыми StepCard/AgentMiniBar; при недоступной LLM — fallback."""
+        engine = self._ensure_react_engine()
+        if engine is None or not self.llm_client.is_healthy():
+            return self._handle_ai_cognitive(text)
+
+        self._agent_step_cards.clear()
+        try:
+            return engine.run(text, on_step_event=self._emit_agent_step)
+        finally:
+            self._emit_agent_inactive()
 
     def _handle_memory_intent(self, params: dict[str, Any] | RouteResult) -> str:
         """
@@ -853,7 +1063,9 @@ class GupkaCommanderApp(QObject):
         self._active_stream_card = None
         self._stream_ui_tokens = []
 
-    def _stream_cognitive_response(self, text: str) -> str:
+    def _stream_cognitive_response(
+        self, text: str, history: list[dict[str, str]] | None = None
+    ) -> str:
         """Потоковая генерация ответа через LLM с озвучиванием и неблокирующей живой печатью."""
         has_drawer = self._has_stream_drawer()
         if has_drawer:
@@ -883,15 +1095,21 @@ class GupkaCommanderApp(QObject):
             synthesizer.speak_stream(_queue_iter())
             self._audio_streamed = True
 
-        memory_ctx = self.memory_manager.format_system_prompt_context()
+        raw_ctx = self.memory_manager.format_system_prompt_context()
+        memory_ctx = raw_ctx if isinstance(raw_ctx, str) else ""
+        stream_kwargs: dict[str, Any] = {}
+        if history and self._accepts_kwarg(self.llm_client.generate_response_stream, "history"):
+            stream_kwargs["history"] = history
         if memory_ctx:
             base_sys = (
                 "Ты автономный оператор Windows 11 GupkaCommander. Отвечай кратко на русском языке."
             )
             sys_prompt = f"{base_sys}\n\n{memory_ctx}"
-            stream_gen = self.llm_client.generate_response_stream(text, system_prompt=sys_prompt)
+            stream_gen = self.llm_client.generate_response_stream(
+                text, system_prompt=sys_prompt, **stream_kwargs
+            )
         else:
-            stream_gen = self.llm_client.generate_response_stream(text)
+            stream_gen = self.llm_client.generate_response_stream(text, **stream_kwargs)
 
         tokens: list[str] = []
         try:
@@ -924,6 +1142,14 @@ class GupkaCommanderApp(QObject):
                 sentence_queue.put(None)
 
         full_text = "".join(tokens).strip()
+        if not full_text:
+            fb_engine = getattr(self.llm_client, "fallback_engine", None)
+            if fb_engine is not None and hasattr(fb_engine, "respond"):
+                fb_reply = fb_engine.respond(text)
+                if isinstance(fb_reply, str) and fb_reply.strip():
+                    full_text = fb_reply.strip()
+            if not full_text:
+                full_text = "Нет ответа от локальной модели."
         if has_drawer:
             if self._is_gui_thread():
                 self._ui_finish_stream_card("done")
@@ -1195,6 +1421,12 @@ class GupkaCommanderApp(QObject):
 
         dialog = SettingsDialog(on_open_models=self.open_dependency_manager)
         dialog.exec()
+        self._apply_ui_settings()
+
+    def _start_llama_servers(self) -> None:
+        """Запускает VLM (:8080) и Qwen3-TTS (:8081) под контролем VRAMBudgetGuard."""
+        starter = getattr(self.llama_manager, "start_all", None) or self.llama_manager.start
+        threading.Thread(target=starter, name="LlamaServerAutostart", daemon=True).start()
 
     def start(self, start_hidden: bool = False) -> None:
         """
@@ -1214,11 +1446,7 @@ class GupkaCommanderApp(QObject):
 
         # 0.5. Автозапуск локального llama-server.exe в фоне (если скачан VLM)
         if self.enable_llm_autostart:
-            threading.Thread(
-                target=self.llama_manager.start,
-                name="LlamaServerAutostart",
-                daemon=True,
-            ).start()
+            self._start_llama_servers()
 
         # 1. Системный трей
         if self.enable_tray:

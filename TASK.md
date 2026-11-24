@@ -5,9 +5,9 @@
 > Обновляется агентом в конце каждого выполненного этапа или задачи (Stage 4 SOP).
 
 ## 1. Project Health & Stage
-- **Current Phase:** Phase 10: Исправления по итогам живого тестирования (Эхо-защита TTS, маршрутизация YouTube/AppFinder, ротируемый лог, редизайн Fluent Glass UI)
-- **Status:** Production-Grade Release (597/597 Tests Green, 0 Ruff in 89 files, 0 Mypy Strict in 81 files)
-- **Last Updated:** 2026-11-23 22:47
+- **Current Phase:** GupkaCommander 2.0 Release (Fluent 2 «Губка» Docked Blade UI, 3-Tier Router + ReAct CDP/UIA/SoM, Multi-Monitor Per-Monitor DPI v2, Memory v2 FTS5, GPU-стек Qwen3.5-4B / Qwen3-TTS / GigaAM v3 ONNX)
+- **Status:** Production-Grade Release 2.0 (756/756 Tests Green, 0 Ruff in 110 files, 0 Mypy Strict in 102 files)
+- **Last Updated:** 2026-11-24 19:38
 - **Active Branch:** `main`
 
 ## 2. Completed Milestones
@@ -61,11 +61,16 @@
   1. **Фаза 3 (3-Tier Execution Router, Browser CDP Bridge & ReActEngine):** Влито в `main` из `swarm-phase3-react-c067ea9e` (`aef0745`). Добавлены `ExecutionTier` (`CASUAL_CHAT`/`FAST_PATH`/`AUTONOMOUS_AGENT`) в `core/routing/intent_router.py`, чистый Python-мост `BrowserCDPBridge` (`core/browser/cdp_bridge.py` с RFC6455 WebSocket без Playwright), `ToolRegistry`, `StepVerifier` и `ReActEngine` (`core/agent/`), а также тесты `tests/test_react_cdp_agent.py`.
 - [x] **2026-11-24 Чекпоинт 5 GupkaCommander 2.0 (Фаза 5B интеграция Blade UI в `main`):**
   1. **Фаза 5B (SpotlightBar, ChatDrawer & SettingsDialog Integration):** Влито в `main` из `swarm-ui-integrator-5e18ff10` (`5357e96`). В реальный UI интегрированы `ThemeManager` (Dark/Light + Acrylic/Mica), `DockManager` (8 позиций, мультимониторность), `SpongePoreWidget`, `ContextChipBar`, `AgentMiniBar`, `ChatDrawer.add_step_card` и настройки Windows 11/STT/TTS в `SettingsDialog` (`tests/test_spotlight_v2_integration.py`).
+- [x] **2026-11-24 Финальный релиз GupkaCommander 2.0 (Сквозной wiring, верификация, сборка `.exe` и публикация в `origin/main`):**
+  1. В `main.py` интегрированы `BrowserCDPBridge`, `SoMAnnotator`, `ToolRegistry`, `StepVerifier`, `ReActEngine`, маршрутизация `ExecutionTier` (`CASUAL_CHAT` с многоходовой историей / `AUTONOMOUS_AGENT` с `AgentMiniBar` и `StepCard` / `FAST_PATH`), `abort_requested -> FailSafeMonitor`, live-применение `config/settings.json`, `VoicePipeline.from_settings(..., echo_guard=True)` и фоновый запуск `LlamaServerManager.start()` (`:8080` VLM + `:8081` TTS под `VRAMBudgetGuard`).
+  2. Обновлён `GupkaCommander.spec` для сбора всех новых v2-модулей (`core.agent`, `core.browser`, `core.vision`, `gui.theme_manager`, `gui.dock_manager`, `gui.sponge_pore_widget`, `gui.agent_widgets`, `onnxruntime`).
+  3. Написаны тесты `tests/test_v2_main_wiring.py`; полный quality gate пройден без ошибок (`ruff`: 0 в 110 файлах, `mypy`: 0 в 102 файлах, `pytest`: **756/756 passed** за 25.22 с).
+  4. Пересобран автономный `dist/GupkaCommander/GupkaCommander.exe` (**70.75 MB**, пакет **898.71 MB**) и подтверждён headless smoke-test (`ExitCode == 0`, свежая запись в `%LOCALAPPDATA%\GupkaCommander\logs\gupka.log`).
 
 ## 3. Active Task (Current Focus)
-- **Feature:** Интеграция GupkaCommander 2.0 — Чекпоинт 5 (Фазы 1, 2, 3, 4, 5A и 5B влиты в `main`).
-- **Status:** Все фазы (1, 2, 3, 4, 5A, 5B) объединены в `main` (без push); выполняется верификация и ожидание финальной сквозной интеграции.
-- **Verification Plan:** Прогон `ruff check`, `mypy` и целевого набора `pytest` на `main`.
+- **Feature:** Релиз GupkaCommander 2.0 — Fluent 2 «Губка», ReAct CDP/UIA/SoM и GPU-стек 2026.
+- **Status:** Все фазы объединены и связаны в `main`; 756/756 тестов зелёные (100%), 0 ошибок `mypy` в 102 файлах, 0 ошибок `ruff` в 110 файлах; `GupkaCommander.exe` (70.75 MB, пакет 898.71 MB) успешно прошёл headless smoke-test.
+- **Verification Plan:** Завершено. Опубликовано в `origin/main`.
 
 ## 4. Next Immediate Steps (Backlog)
 - [x] **Вектор 1:** Microsoft UI Automation (Tier 1 UIA) — мгновенный клик и ввод в окнах по именам элементов.
@@ -87,4 +92,4 @@
   - `2026-11-20`: Двухуровневый инсталлятор Inno Setup (`scripts/installer.iss`): по умолчанию без UAC в AppData с диалогом выбора Program Files.
   - `2026-11-20`: Комплексный харденинг `ShellExecutor` против обфускации backtick, `-EncodedCommand`, Base64 и деструктивных операций файловой системы.
 - **Known Blockers / Warnings:**
-  - Нет блокеров. Проект полностью завершен, собран и протестирован (570/570 тестов зелёные).
+  - Нет блокеров. Релиз GupkaCommander 2.0 завершён, собран и протестирован (756/756 тестов зелёные).

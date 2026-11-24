@@ -388,12 +388,20 @@ class TestEndToEndExecutionFlow:
                 "parameters": {"query": "новости космоса", "engine": "google"},
             },
         ]
-        app_bundle.mock_llm.plan_actions.return_value = planned_actions
+        app_bundle.mock_llm.plan_actions.side_effect = [
+            planned_actions,
+            [
+                {
+                    "tool": "finish_task",
+                    "parameters": {"summary": "Все окна свернуты, выполнен поиск новости космоса."},
+                }
+            ],
+        ]
 
         response = app_bundle.app.execute_command("сверни все окна и найди новости космоса")
 
-        app_bundle.mock_os.minimize_window.assert_called_once_with("")
-        app_bundle.mock_os.search.assert_called_once_with("новости космоса")
+        app_bundle.mock_os.minimize_all.assert_called_once()
+        app_bundle.mock_os.search.assert_called_once_with(query="новости космоса", engine="google")
         assert "свернуты" in response
         assert "новости космоса" in response
 
