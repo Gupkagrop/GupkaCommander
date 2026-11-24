@@ -59,11 +59,13 @@
   1. **Фаза 5A (Fluent 2 Docked Blade & Micro-Pore Matrix):** Влито в `main` из `swarm-ui-blade-a354f326` (`b0a9fd3`). Добавлены `gui/theme_manager.py` (`ThemeManager`, Dark/Light + Sponge Ochre, Win11 DWM backdrop), `gui/dock_manager.py` (8 зон стыковки, 1/2/3+ мониторов, смешанный DPI), `gui/sponge_pore_widget.py` (9-поровая матрица 0/15/60 FPS + текстура микро-пор), `gui/agent_widgets.py` (`ContextChipBar`, `StepCard`, `AgentMiniBar`) и тесты `tests/test_v2_ui_components.py`.
 - [x] **2026-11-24 Чекпоинт 4 GupkaCommander 2.0 (Фаза 3 ReAct + CDP в `main`):**
   1. **Фаза 3 (3-Tier Execution Router, Browser CDP Bridge & ReActEngine):** Влито в `main` из `swarm-phase3-react-c067ea9e` (`aef0745`). Добавлены `ExecutionTier` (`CASUAL_CHAT`/`FAST_PATH`/`AUTONOMOUS_AGENT`) в `core/routing/intent_router.py`, чистый Python-мост `BrowserCDPBridge` (`core/browser/cdp_bridge.py` с RFC6455 WebSocket без Playwright), `ToolRegistry`, `StepVerifier` и `ReActEngine` (`core/agent/`), а также тесты `tests/test_react_cdp_agent.py`.
+- [x] **2026-11-24 Чекпоинт 5 GupkaCommander 2.0 (Фаза 5B интеграция Blade UI в `main`):**
+  1. **Фаза 5B (SpotlightBar, ChatDrawer & SettingsDialog Integration):** Влито в `main` из `swarm-ui-integrator-5e18ff10` (`5357e96`). В реальный UI интегрированы `ThemeManager` (Dark/Light + Acrylic/Mica), `DockManager` (8 позиций, мультимониторность), `SpongePoreWidget`, `ContextChipBar`, `AgentMiniBar`, `ChatDrawer.add_step_card` и настройки Windows 11/STT/TTS в `SettingsDialog` (`tests/test_spotlight_v2_integration.py`).
 
 ## 3. Active Task (Current Focus)
-- **Feature:** Интеграция GupkaCommander 2.0 — Чекпоинт 4 (Фазы 1, 2, 3, 4 и 5A влиты в `main`).
-- **Status:** Фазы 1, 2, 3, 4 и 5A объединены в `main` (без push); выполняется верификация и ожидание следующих этапов интеграции (Фаза 5B).
-- **Verification Plan:** Прогон `ruff check`, `mypy` и целевого набора `pytest` на `main` перед финальной интеграцией.
+- **Feature:** Интеграция GupkaCommander 2.0 — Чекпоинт 5 (Фазы 1, 2, 3, 4, 5A и 5B влиты в `main`).
+- **Status:** Все фазы (1, 2, 3, 4, 5A, 5B) объединены в `main` (без push); выполняется верификация и ожидание финальной сквозной интеграции.
+- **Verification Plan:** Прогон `ruff check`, `mypy` и целевого набора `pytest` на `main`.
 
 ## 4. Next Immediate Steps (Backlog)
 - [x] **Вектор 1:** Microsoft UI Automation (Tier 1 UIA) — мгновенный клик и ввод в окнах по именам элементов.
