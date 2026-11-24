@@ -4,12 +4,16 @@
 > Координирует захват звука, VAD, распознавание речи (STT), синтез (TTS) и Barge-In.
 """
 
+from __future__ import annotations
+
+import json
 import logging
 import threading
 import time
 from collections.abc import Callable
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
+from pathlib import Path
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -83,6 +87,10 @@ class VoicePipeline:
         on_audio_level: Callable[[float], None] | None = None,
         echo_guard: bool = False,
         echo_tail_seconds: float = 0.45,
+        stt_engine: str = "faster-whisper",
+        tts_engine: str = "piper",
+        tts_base_url: str = "http://127.0.0.1:8081",
+        settings_path: Path | None = None,
     ) -> None:
         """Инициализация голосового конвейера с внедрением зависимостей."""
         self._audio_capture = audio_capture
@@ -96,6 +104,10 @@ class VoicePipeline:
         self._echo_guard = echo_guard
         self._echo_tail_seconds = max(0.0, echo_tail_seconds)
         self._echo_guard_until: float = 0.0
+        self._stt_engine = stt_engine
+        self._tts_engine = tts_engine
+        self._tts_base_url = tts_base_url
+        self._settings_path = settings_path
 
         self.on_state_changed = on_state_changed
         self.on_speech_start = on_speech_start
@@ -133,22 +145,93 @@ class VoicePipeline:
             self._vad_detector = VADDetector()
         return self._vad_detector
 
+    @classmethod
+    def from_settings(
+        cls,
+        settings_path: Path | None = None,
+        **kwargs: Any,
+    ) -> VoicePipeline:
+        """Создает VoicePipeline, считывая выбранные движки STT/TTS из settings.json."""
+        stt_eng, tts_eng, tts_url = cls._read_engine_config(settings_path)
+        kwargs.setdefault("stt_engine", stt_eng)
+        kwargs.setdefault("tts_engine", tts_eng)
+        kwargs.setdefault("tts_base_url", tts_url)
+        kwargs.setdefault("settings_path", settings_path)
+        return cls(**kwargs)
+
+    @staticmethod
+    def _read_engine_config(settings_path: Path | None = None) -> tuple[str, str, str]:
+        """Считывает (stt_engine, tts_engine, tts_base_url) из settings.json."""
+        from core.paths import get_config_path
+
+        path = settings_path if settings_path is not None else get_config_path("settings.json")
+        stt_engine = "faster-whisper"
+        tts_engine = "piper"
+        tts_base_url = "http://127.0.0.1:8081"
+        if not path.is_file():
+            return stt_engine, tts_engine, tts_base_url
+
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            models_cfg = data.get("models", {})
+            if isinstance(models_cfg, dict):
+                stt_cfg = models_cfg.get("stt", {})
+                if isinstance(stt_cfg, dict) and stt_cfg.get("engine"):
+                    stt_engine = str(stt_cfg["engine"])
+                tts_cfg = models_cfg.get("tts", {})
+                if isinstance(tts_cfg, dict):
+                    if tts_cfg.get("engine"):
+                        tts_engine = str(tts_cfg["engine"])
+                    if tts_cfg.get("port"):
+                        tts_base_url = f"http://127.0.0.1:{int(tts_cfg['port'])}"
+        except Exception as exc:
+            logger.debug("Ошибка чтения конфигурации голосовых движков из %s: %s", path, exc)
+
+        return stt_engine, tts_engine, tts_base_url
+
+    def _resolve_stt_engine(self) -> str:
+        """Возвращает нормализованный идентификатор STT-движка."""
+        if self._stt_engine == "auto":
+            stt_eng, _, _ = self._read_engine_config(self._settings_path)
+            return stt_eng.strip().lower()
+        return self._stt_engine.strip().lower()
+
+    def _resolve_tts_engine(self) -> str:
+        """Возвращает нормализованный идентификатор TTS-движка."""
+        if self._tts_engine == "auto":
+            _, tts_eng, tts_url = self._read_engine_config(self._settings_path)
+            self._tts_base_url = tts_url
+            return tts_eng.strip().lower()
+        return self._tts_engine.strip().lower()
+
     @property
     def transcriber(self) -> TranscriberProtocol:
-        """Ленивая инициализация FasterWhisperTranscriber при отсутствии внешней зависимости."""
+        """Ленивая инициализация STT-движка (GigaAM v3 ONNX или Faster-Whisper)."""
         if self._transcriber is None:
-            from core.voice.transcriber import FasterWhisperTranscriber
+            engine = self._resolve_stt_engine()
+            if engine in {"gigaam", "gigaam-v3", "gigaam_v3", "gigaam-v3-onnx"}:
+                from core.voice.gigaam_transcriber import GigaAMOnnxTranscriber
 
-            self._transcriber = FasterWhisperTranscriber()
+                self._transcriber = GigaAMOnnxTranscriber()
+            else:
+                from core.voice.transcriber import FasterWhisperTranscriber
+
+                self._transcriber = FasterWhisperTranscriber()
         return self._transcriber
 
     @property
     def synthesizer(self) -> SynthesizerProtocol:
-        """Ленивая инициализация PiperSynthesizer при отсутствии внешней зависимости."""
+        """Ленивая инициализация TTS-движка (Qwen3-TTS с откатом на Piper или Piper)."""
         if self._synthesizer is None:
-            from core.voice.synthesizer import PiperSynthesizer
+            engine = self._resolve_tts_engine()
+            if engine in {"qwen3-tts", "qwen-tts", "qwen_tts"}:
+                from core.voice.qwen_tts_synthesizer import QwenTTSSynthesizer
 
-            self._synthesizer = PiperSynthesizer()
+                self._synthesizer = QwenTTSSynthesizer(base_url=self._tts_base_url)
+            else:
+                from core.voice.synthesizer import PiperSynthesizer
+
+                self._synthesizer = PiperSynthesizer()
         return self._synthesizer
 
     @property

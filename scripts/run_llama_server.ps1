@@ -1,19 +1,24 @@
 ﻿<#
 .SYNOPSIS
-    GupkaCommander: Скрипт запуска локального инференс-сервера llama-server.exe.
+    GupkaCommander: Скрипт запуска локальных инференс-серверов llama-server.exe (VLM + Qwen3-TTS).
 .DESCRIPTION
-    Запускает OpenAI-совместимый HTTP сервер llama.cpp для мультимодальной модели
-    Qwen3-VL-4B-Instruct (GGUF Q4_K_M + mmproj Q8_0) с выгрузкой всех слоев на GPU NVIDIA.
+    Запускает OpenAI-совместимый HTTP сервер llama.cpp для:
+    - VLM (:8080): Qwen3.5-4B (GGUF Q4_K_M + mmproj F16, -fa on -ctk q8_0 -ctv q8_0)
+    - TTS (:8081, флаг -TtsMode): Qwen3-TTS-12Hz-1.7B (GGUF Q4_K_M + mmproj Q8_0, --tts-lang ru)
 #>
 
 [CmdletBinding()]
 param(
-    [string]$ModelPath = "models\llm\qwen3-vl-4b-instruct-q4_k_m.gguf",
-    [string]$MmprojPath = "models\llm\mmproj-qwen3-vl-4b-instruct-q8_0.gguf",
+    [string]$ModelPath = "models\llm\Qwen3.5-4B-Q4_K_M.gguf",
+    [string]$MmprojPath = "models\llm\mmproj-qwen3.5-4b-f16.gguf",
+    [string]$TtsModelPath = "models\tts\Qwen3-TTS-12Hz-1.7B-Base-Q4_K_M.gguf",
+    [string]$TtsMmprojPath = "models\tts\mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf",
     [int]$Port = 8080,
+    [int]$TtsPort = 8081,
     [string]$HostAddress = "127.0.0.1",
     [int]$Ngl = 99,
-    [int]$CtxSize = 4096,
+    [int]$CtxSize = 8192,
+    [switch]$TtsMode,
     [switch]$NoPause
 )
 
@@ -24,12 +29,13 @@ $ProjectRoot = Resolve-Path "$PSScriptRoot\.."
 Set-Location $ProjectRoot
 
 Write-Host "====================================================================" -ForegroundColor Cyan
-Write-Host "  GupkaCommander -- Запуск локального VLM сервера llama.cpp" -ForegroundColor Cyan
+Write-Host "  GupkaCommander -- Запуск локального сервера llama.cpp (2.0)" -ForegroundColor Cyan
 Write-Host "====================================================================" -ForegroundColor Cyan
 
 # 1. Поиск исполняемого файла llama-server.exe
 $CandidatePaths = @(
     $env:LLAMA_SERVER_PATH,
+    "$env:LOCALAPPDATA\GupkaCommander\bin\llama-server.exe",
     "$ProjectRoot\llama-server.exe",
     "$ProjectRoot\tools\llama-server.exe",
     "$ProjectRoot\bin\llama-server.exe",
@@ -53,7 +59,7 @@ if (-not $LlamaBin) {
 
 if (-not $LlamaBin) {
     Write-Host "`n[ОШИБКА] Исполняемый файл llama-server.exe не обнаружен." -ForegroundColor Red
-    Write-Host "`nДля автономной работы когнитивного зрения и планировщика GupkaCommander"
+    Write-Host "`nДля автономной работы когнитивного зрения и GPU TTS GupkaCommander"
     Write-Host "требуется бинарный сервер llama.cpp с поддержкой аппаратного ускорения GPU."
     Write-Host "`nПожалуйста, выполните следующие шаги:"
     Write-Host "1. Перейдите на страницу официальных релизов llama.cpp:" -ForegroundColor Yellow
@@ -70,7 +76,28 @@ if (-not $LlamaBin) {
 
 Write-Host "[OK] Найден бинарный файл: $LlamaBin" -ForegroundColor Green
 
-# 2. Проверка наличия моделей
+if ($TtsMode) {
+    if (-not (Test-Path $TtsModelPath)) {
+        Write-Host "`n[ПРЕДУПРЕЖДЕНИЕ] Файл модели Qwen3-TTS не найден: $TtsModelPath" -ForegroundColor Yellow
+    }
+    Write-Host "`nЗапуск TTS сервера (Qwen3-TTS):" -ForegroundColor Gray
+    Write-Host "  Хост:      ${HostAddress}:${TtsPort}" -ForegroundColor Gray
+    Write-Host "  Слои GPU:  $Ngl`n" -ForegroundColor Gray
+
+    $TtsArgs = @(
+        "--model", $TtsModelPath,
+        "--mmproj", $TtsMmprojPath,
+        "-ngl", $Ngl,
+        "--port", $TtsPort,
+        "--host", $HostAddress,
+        "-fa", "on",
+        "--tts-lang", "ru"
+    )
+    & $LlamaBin @TtsArgs
+    exit $LASTEXITCODE
+}
+
+# 2. Проверка наличия VLM моделей
 if (-not (Test-Path $ModelPath)) {
     Write-Host "`n[ПРЕДУПРЕЖДЕНИЕ] Файл модели не найден: $ModelPath" -ForegroundColor Yellow
     Write-Host "Вы можете скачать его автоматически с помощью команды:"
@@ -81,7 +108,7 @@ if (-not (Test-Path $MmprojPath)) {
     Write-Host "[ПРЕДУПРЕЖДЕНИЕ] Файл проектора мультимодальности не найден: $MmprojPath`n" -ForegroundColor Yellow
 }
 
-Write-Host "`nЗапуск сервера:" -ForegroundColor Gray
+Write-Host "`nЗапуск VLM сервера:" -ForegroundColor Gray
 Write-Host "  Хост:      ${HostAddress}:${Port}" -ForegroundColor Gray
 Write-Host "  Слои GPU:  $Ngl (полная выгрузка в VRAM)" -ForegroundColor Gray
 Write-Host "  Контекст:  $CtxSize токенов`n" -ForegroundColor Gray
@@ -93,6 +120,9 @@ $ArgsList = @(
     "--port", $Port,
     "--host", $HostAddress,
     "--ctx-size", $CtxSize,
+    "-fa", "on",
+    "-ctk", "q8_0",
+    "-ctv", "q8_0",
     "--image-min-tokens", "1024",
     "--jinja"
 )
