@@ -218,6 +218,60 @@ class TestQwenTTSSynthesizer:
         with pytest.raises(ValueError):
             _decode_wav_to_float32(b"not-a-wav")
 
+    def test_timeout_8s_and_circuit_breaker_cooldown_with_recovery(self) -> None:
+        """Таймаут 8с и circuit breaker (45с) мгновенно переводят фразы в Piper без зависаний."""
+        pcm = np.linspace(-10000, 10000, 800, dtype=np.int16)
+        wav_bytes = _make_wav_bytes(pcm, sample_rate=24000)
+
+        ok_resp = MagicMock()
+        ok_resp.status_code = 200
+        ok_resp.content = wav_bytes
+        ok_resp.raise_for_status.return_value = None
+
+        err_resp = MagicMock()
+        err_resp.status_code = 503
+        err_resp.raise_for_status.side_effect = requests.HTTPError("503 Service Unavailable")
+
+        mock_session = MagicMock(spec=requests.Session)
+        mock_session.post.side_effect = [err_resp, ok_resp]
+        mock_fallback = MagicMock(spec=SynthesizerProtocol)
+        mock_fallback.is_speaking.return_value = False
+
+        synth = QwenTTSSynthesizer(
+            fallback_synthesizer=mock_fallback,
+            session=mock_session,
+        )
+        assert synth._timeout_seconds == pytest.approx(8.0)
+        assert synth._cooldown_seconds == pytest.approx(45.0)
+
+        # 1-я фраза падает с 503 -> взводит cooldown -> следующие фразы не ходят в :8081
+        synth.speak_stream(
+            iter(["Первая фраза.", "Вторая фраза.", "Третья фраза."]),
+            blocking=True,
+        )
+        assert synth.is_in_cooldown is True
+        assert mock_session.post.call_count == 1
+        assert mock_fallback.speak.call_count == 3
+
+        # При cooldown_seconds=0.0 следующее предложение снова пробует /tts и восстанавливается
+        written_blocks: list[np.ndarray] = []
+        abort_event = threading.Event()
+        mock_session_rec = MagicMock(spec=requests.Session)
+        mock_session_rec.post.side_effect = [err_resp, ok_resp]
+        mock_fallback_rec = MagicMock(spec=SynthesizerProtocol)
+        mock_fallback_rec.is_speaking.return_value = False
+
+        synth_rec = QwenTTSSynthesizer(
+            cooldown_seconds=0.0,
+            fallback_synthesizer=mock_fallback_rec,
+            output_stream_factory=lambda **_kw: _FakeOutputStream(written_blocks, abort_event),
+            session=mock_session_rec,
+        )
+        synth_rec.speak_stream(iter(["Сбойная фраза.", "Восстановленная фраза."]), blocking=True)
+        assert mock_session_rec.post.call_count == 2
+        assert mock_fallback_rec.speak.call_count == 1
+        assert synth_rec.backend == QwenTTSSynthesizer.BACKEND_QWEN_TTS
+
 
 class TestGigaAMOnnxTranscriber:
     """Тесты распознавания речи GigaAM v3 ONNX и нормализации терминов."""
@@ -325,6 +379,98 @@ class TestLlamaServerManagerDualGPU:
         with patch("core.brain.llama_manager.subprocess.run", side_effect=TimeoutError("timeout")):
             guard_err = VRAMBudgetGuard(min_total_gb=6.5)
             assert guard_err.can_run_tts() is False
+
+        assert VRAMBudgetGuard().min_free_gb == pytest.approx(2.2)
+
+    def test_start_waits_for_vlm_health_before_checking_vram_for_tts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """start() ждёт готовности VLM (/health == 200) перед проверкой VRAM и стартом TTS."""
+        monkeypatch.setattr("core.bootstrap.shutil.which", lambda _name: None)
+        monkeypatch.setattr("core.bootstrap.get_bundle_root", lambda: tmp_path / "bundle")
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "llama-server.exe").write_bytes(b"MZ")
+        llm_dir = tmp_path / "models" / "llm"
+        llm_dir.mkdir(parents=True)
+        (llm_dir / DEFAULT_MODEL_FILENAME).write_bytes(b"vlm")
+        (llm_dir / DEFAULT_MMPROJ_FILENAME).write_bytes(b"mmproj")
+        tts_dir = tmp_path / "models" / "tts"
+        tts_dir.mkdir(parents=True)
+        (tts_dir / DEFAULT_TTS_MODEL_FILENAME).write_bytes(b"tts")
+        (tts_dir / DEFAULT_TTS_MMPROJ_FILENAME).write_bytes(b"tts-mmproj")
+
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(
+            json.dumps({"models": {"tts": {"engine": "qwen3-tts"}, "llm": {"autostart": True}}}),
+            encoding="utf-8",
+        )
+
+        # Пока VLM не готов, VRAM ещё 7 ГБ, но после загрузки VLM остаётся 1.9 ГБ (< 2.2 ГБ)
+        vlm_ready = False
+        probe_calls: list[bool] = []
+        health_checks = 0
+
+        def _health() -> bool:
+            nonlocal health_checks, vlm_ready
+            health_checks += 1
+            if health_checks >= 4:
+                vlm_ready = True
+            return vlm_ready
+
+        def _vram_probe() -> VRAMStatus:
+            probe_calls.append(vlm_ready)
+            free_mb = 1950.0 if vlm_ready else 7000.0
+            return VRAMStatus(gpu_available=True, total_mb=8192.0, free_mb=free_mb)
+
+        def _fake_popen(*_args: Any, **_kwargs: Any) -> MagicMock:
+            p = MagicMock()
+            p.poll.return_value = None
+            return p
+
+        mock_popen = MagicMock(side_effect=_fake_popen)
+        with (
+            patch("core.brain.llama_manager.MIN_VLM_BYTES", 1),
+            patch("core.brain.llama_manager.MIN_TTS_BYTES", 1),
+        ):
+            mgr = LlamaServerManager(
+                models_dir=tmp_path / "models",
+                bin_dir=bin_dir,
+                settings_path=settings_file,
+                popen_factory=mock_popen,
+                health_checker=_health,
+                tts_health_checker=lambda: False,
+                vram_guard=VRAMBudgetGuard(vram_probe=_vram_probe),
+                vlm_ready_timeout=2.0,
+                vlm_poll_interval=0.01,
+            )
+            assert mgr.start() is True
+            assert vlm_ready is True
+            assert probe_calls == [True]
+            assert mock_popen.call_count == 1
+            assert mgr.is_tts_running_managed() is False
+
+            # Если health_checker=None с моковым popen_factory, ожидание пропускается без сна
+            mock_popen_fast = MagicMock(side_effect=_fake_popen)
+            mgr_fast = LlamaServerManager(
+                models_dir=tmp_path / "models",
+                bin_dir=bin_dir,
+                settings_path=settings_file,
+                popen_factory=mock_popen_fast,
+                health_checker=None,
+                tts_health_checker=lambda: False,
+                vram_guard=VRAMBudgetGuard(
+                    vram_probe=lambda: VRAMStatus(gpu_available=True, total_mb=8192, free_mb=3200)
+                ),
+            )
+            with (
+                patch.object(mgr_fast, "is_server_healthy", return_value=False),
+                patch("core.brain.llama_manager.time.sleep") as mock_sleep,
+            ):
+                assert mgr_fast.start() is True
+                mock_sleep.assert_not_called()
+                assert mock_popen_fast.call_count == 2
 
     def test_dual_service_launch_8gb_vram_vs_low_vram(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

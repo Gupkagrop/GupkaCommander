@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import inspect
 import json
 import logging
@@ -24,7 +25,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
@@ -33,7 +34,7 @@ from core.agent.step_verifier import StepVerifier
 from core.agent.tool_registry import ToolRegistry
 from core.app_finder import AppFinder
 from core.brain.llama_manager import LlamaServerManager
-from core.brain.llm_client import LocalLLMClient
+from core.brain.llm_client import DEFAULT_CHAT_SYSTEM_PROMPT, LocalLLMClient
 from core.browser.cdp_bridge import BrowserCDPBridge
 from core.failsafe import FailSafeMonitor, get_failsafe_monitor
 from core.memory import MemoryManager
@@ -232,6 +233,7 @@ class GupkaCommanderApp(QObject):
         self._audio_streamed: bool = False
         self._is_shutting_down: bool = False
         self._is_executing_command: bool = False
+        self._last_agent_goal: str = ""
         self._applying_ui_settings: bool = False
         self._voice_was_running_before_delete: bool = False
         self._execution_lock: threading.Lock = threading.Lock()
@@ -428,8 +430,65 @@ class GupkaCommanderApp(QObject):
         except Exception as exc:
             logger.debug("Не удалось сохранить ui.dock_position=%r: %s", clean_pos, exc)
 
+    @staticmethod
+    def _is_own_or_ignored_window_title(title: str) -> bool:
+        """Отсеивает пустые, служебные заголовки и окна самого GupkaCommander."""
+        clean = title.strip()
+        if not clean:
+            return True
+        lower = clean.lower()
+        if lower.startswith("gupkacommander"):
+            return True
+        return clean in {"Program Manager", "Default IME", "MSCTFIME UI"}
+
+    def _get_active_window_title(self) -> str | None:
+        """Возвращает заголовок активного окна Windows, пропуская GupkaCommander."""
+        if os.name != "nt" or not hasattr(ctypes, "windll"):
+            return None
+        try:
+            user32 = ctypes.windll.user32
+            own_hwnd: int | None = None
+            if (
+                hasattr(self.spotlight_bar, "testAttribute")
+                and self.spotlight_bar.testAttribute(Qt.WidgetAttribute.WA_WState_Created)
+                and hasattr(self.spotlight_bar, "winId")
+            ):
+                raw_id = self.spotlight_bar.winId()
+                if isinstance(raw_id, int):
+                    own_hwnd = raw_id
+
+            hwnd = user32.GetForegroundWindow()
+            visited: set[int] = set()
+            for _ in range(20):
+                if not isinstance(hwnd, int) or hwnd <= 0 or hwnd in visited:
+                    break
+                visited.add(hwnd)
+
+                is_visible = True
+                if len(visited) > 1 and hasattr(user32, "IsWindowVisible"):
+                    vis_res = user32.IsWindowVisible(hwnd)
+                    if isinstance(vis_res, (int, bool)):
+                        is_visible = bool(vis_res)
+
+                if is_visible and (own_hwnd is None or hwnd != own_hwnd):
+                    buf = ctypes.create_unicode_buffer(256)
+                    copied = user32.GetWindowTextW(hwnd, buf, 256)
+                    raw_title = (
+                        buf.value[:copied] if isinstance(copied, int) and copied > 0 else buf.value
+                    )
+                    title = str(raw_title).strip()
+                    if not self._is_own_or_ignored_window_title(title):
+                        return title if len(title) <= 32 else f"{title[:31]}…"
+
+                if not hasattr(user32, "GetWindow"):
+                    break
+                hwnd = user32.GetWindow(hwnd, 2)
+        except Exception as exc:
+            logger.debug("Не удалось получить заголовок активного окна Win32: %s", exc)
+        return None
+
     def _refresh_context_chips(self) -> None:
-        """Обновляет контекстные чипы SpotlightBar (память, монитор, голос)."""
+        """Обновляет контекстные чипы SpotlightBar (память, монитор, активное окно, голос)."""
         if not hasattr(self.spotlight_bar, "update_context_chips"):
             return
         if not self._is_gui_thread():
@@ -461,6 +520,8 @@ class GupkaCommanderApp(QObject):
             target_mon = str(ui_cfg.get("target_monitor", "auto")).strip()
             monitor_label = "Авто" if target_mon.lower() == "auto" else f"Мон. {target_mon}"
 
+        active_app = self._get_active_window_title()
+
         is_muted = False
         try:
             if hasattr(self.tray_manager, "is_muted"):
@@ -474,6 +535,7 @@ class GupkaCommanderApp(QObject):
         try:
             self.spotlight_bar.update_context_chips(
                 monitor_label=monitor_label,
+                active_app=active_app,
                 memory_count=memory_count,
                 voice_mode=voice_mode,
                 voice_active=voice_active,
@@ -791,13 +853,66 @@ class GupkaCommanderApp(QObject):
 
         return self._handle_ai_cognitive(text)
 
+    def _resolve_last_agent_goal(self) -> str:
+        """Возвращает последнюю цель автономного агента из сессии или эпизодической памяти."""
+        if self._last_agent_goal.strip():
+            return self._last_agent_goal.strip()
+
+        episodes: Any = None
+        try:
+            list_fn = getattr(self.memory_manager, "list_episodes", None)
+            if callable(list_fn):
+                try:
+                    episodes = list_fn(limit=1)
+                except TypeError:
+                    episodes = list_fn()
+            else:
+                recall_fn = getattr(self.memory_manager, "recall_episodes", None)
+                if callable(recall_fn):
+                    episodes = recall_fn("", limit=1)
+        except Exception as exc:
+            logger.debug("Ошибка чтения последнего эпизода из памяти: %s", exc)
+            return ""
+
+        if isinstance(episodes, list) and episodes:
+            first = episodes[0]
+            if isinstance(first, dict):
+                goal_val = first.get("goal")
+                if isinstance(goal_val, str) and goal_val.strip():
+                    self._last_agent_goal = goal_val.strip()
+                    return self._last_agent_goal
+        return ""
+
+    def _is_retry_command(self, text: str, route: RouteResult) -> bool:
+        """Определяет, является ли команда русским запросом повтора предыдущей задачи."""
+        if bool(route.params.get("is_retry")):
+            return True
+        is_retry_fn = getattr(self.intent_router, "is_retry_query", None)
+        if callable(is_retry_fn):
+            try:
+                return bool(is_retry_fn(text))
+            except Exception:
+                return False
+        return False
+
     def _dispatch_by_tier(self, text: str, route: RouteResult) -> str | None:
         """Обрабатывает уровни CASUAL_CHAT и AUTONOMOUS_AGENT; для FAST_PATH возвращает None."""
+        if self._is_retry_command(text, route):
+            prev_goal = self._resolve_last_agent_goal()
+            if prev_goal:
+                retry_prompt = (
+                    f"Повторная попытка цели: {prev_goal}. "
+                    "Предыдущий способ не сработал — используй альтернативные инструменты: "
+                    "click_screen по скриншоту, горячие клавиши press_key или PowerShell."
+                )
+                return self._handle_autonomous_agent(retry_prompt, remember_goal=False)
+            return self._handle_casual_chat(text)
+
         tier = getattr(route, "tier", ExecutionTier.FAST_PATH)
         if tier == ExecutionTier.CASUAL_CHAT:
             return self._handle_casual_chat(text)
         if tier == ExecutionTier.AUTONOMOUS_AGENT:
-            return self._handle_autonomous_agent(text)
+            return self._handle_autonomous_agent(text, remember_goal=True)
         return None
 
     def _offline_casual_chat_reply(self, text: str) -> str:
@@ -850,8 +965,11 @@ class GupkaCommanderApp(QObject):
             p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
         )
 
-    def _handle_autonomous_agent(self, text: str) -> str:
+    def _handle_autonomous_agent(self, text: str, *, remember_goal: bool = True) -> str:
         """Запускает ReActEngine с живыми StepCard/AgentMiniBar; при недоступной LLM — fallback."""
+        if remember_goal and text.strip():
+            self._last_agent_goal = text.strip()
+
         engine = self._ensure_react_engine()
         if engine is None or not self.llm_client.is_healthy():
             return self._handle_ai_cognitive(text)
@@ -1197,6 +1315,13 @@ class GupkaCommanderApp(QObject):
         self._active_stream_card = None
         self._stream_ui_tokens = []
 
+    def _finish_stream_card_safe(self, status: str) -> None:
+        """Потокобезопасно переводит активную стриминговую карточку в статус 'done' или 'error'."""
+        if self._is_gui_thread():
+            self._ui_finish_stream_card(status)
+            return
+        self.voice_bridge.stream_card_finished.emit(status)
+
     def _stream_cognitive_response(
         self, text: str, history: list[dict[str, str]] | None = None
     ) -> str:
@@ -1208,6 +1333,7 @@ class GupkaCommanderApp(QObject):
             else:
                 self.voice_bridge.stream_card_started.emit()
 
+        card_finished = False
         accumulator = SentenceAccumulator()
         sentence_queue: queue.Queue[str | None] = queue.Queue()
 
@@ -1229,33 +1355,26 @@ class GupkaCommanderApp(QObject):
             synthesizer.speak_stream(_queue_iter())
             self._audio_streamed = True
 
-        raw_ctx = self.memory_manager.format_system_prompt_context()
-        memory_ctx = raw_ctx if isinstance(raw_ctx, str) else ""
-        stream_kwargs: dict[str, Any] = {}
-        if history and self._accepts_kwarg(self.llm_client.generate_response_stream, "history"):
-            stream_kwargs["history"] = history
-        if memory_ctx:
-            base_sys = (
-                "Ты автономный оператор Windows 11 GupkaCommander. Отвечай кратко на русском языке."
-            )
-            sys_prompt = f"{base_sys}\n\n{memory_ctx}"
-            stream_gen = self.llm_client.generate_response_stream(
-                text, system_prompt=sys_prompt, **stream_kwargs
-            )
-        else:
-            stream_gen = self.llm_client.generate_response_stream(text, **stream_kwargs)
-
         tokens: list[str] = []
         try:
+            raw_ctx = self.memory_manager.format_system_prompt_context()
+            memory_ctx = raw_ctx if isinstance(raw_ctx, str) else ""
+            stream_kwargs: dict[str, Any] = {}
+            if history and self._accepts_kwarg(self.llm_client.generate_response_stream, "history"):
+                stream_kwargs["history"] = history
+            if memory_ctx:
+                sys_prompt = f"{DEFAULT_CHAT_SYSTEM_PROMPT}\n\n{memory_ctx}"
+                if self._accepts_kwarg(self.llm_client.generate_response_stream, "system_prompt"):
+                    stream_kwargs["system_prompt"] = sys_prompt
+            stream_gen = self.llm_client.generate_response_stream(text, **stream_kwargs)
+
             for chunk in stream_gen:
                 if self.failsafe_monitor.is_interrupted():
                     if synthesizer is not None and hasattr(synthesizer, "stop"):
                         synthesizer.stop()
                     if has_drawer:
-                        if self._is_gui_thread():
-                            self._ui_finish_stream_card("error")
-                        else:
-                            self.voice_bridge.stream_card_finished.emit("error")
+                        self._finish_stream_card_safe("error")
+                        card_finished = True
                     raise InterruptedError("Операция экстренно прервана пользователем (FailSafe).")
 
                 tokens.append(chunk)
@@ -1271,27 +1390,27 @@ class GupkaCommanderApp(QObject):
             tail = accumulator.flush()
             if tail and can_speak:
                 sentence_queue.put(tail)
+
+            full_text = "".join(tokens).strip()
+            if not full_text:
+                fb_engine = getattr(self.llm_client, "fallback_engine", None)
+                if fb_engine is not None and hasattr(fb_engine, "respond"):
+                    fb_reply = fb_engine.respond(text)
+                    if isinstance(fb_reply, str) and fb_reply.strip():
+                        full_text = fb_reply.strip()
+                if not full_text:
+                    full_text = "Нет ответа от локальной модели."
+            if has_drawer:
+                self._finish_stream_card_safe("done")
+                card_finished = True
+                self._current_response_streamed = True
+
+            return full_text
         finally:
             if can_speak:
                 sentence_queue.put(None)
-
-        full_text = "".join(tokens).strip()
-        if not full_text:
-            fb_engine = getattr(self.llm_client, "fallback_engine", None)
-            if fb_engine is not None and hasattr(fb_engine, "respond"):
-                fb_reply = fb_engine.respond(text)
-                if isinstance(fb_reply, str) and fb_reply.strip():
-                    full_text = fb_reply.strip()
-            if not full_text:
-                full_text = "Нет ответа от локальной модели."
-        if has_drawer:
-            if self._is_gui_thread():
-                self._ui_finish_stream_card("done")
-            else:
-                self.voice_bridge.stream_card_finished.emit("done")
-            self._current_response_streamed = True
-
-        return full_text
+            if has_drawer and not card_finished:
+                self._finish_stream_card_safe("error")
 
     def _handle_ai_cognitive(self, text: str) -> str:
         """Обработка свободного запроса через локальную модель LLM (планирование/ответ)."""
