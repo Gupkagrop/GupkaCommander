@@ -57,11 +57,13 @@
   1. **Фаза 4 (GPU-first Brain & Voice Stack):** Влито в `main` из `swarm-phase4-gpu-voice-dfda1377` (`9fe02b7`). Добавлены `Qwen3.5-4B`, `QwenTTSSynthesizer` через `llama-server :8081` (`core/voice/qwen_tts_synthesizer.py`), `GigaAMOnnxTranscriber` (`core/voice/gigaam_transcriber.py`), двухсервисный `LlamaServerManager` с `VRAMBudgetGuard` (`core/brain/llama_manager.py`), интеграция в `VoicePipeline`, `bootstrap.py` и тесты `tests/test_gpu_voice_v2.py`.
 - [x] **2026-11-24 Чекпоинт 3 GupkaCommander 2.0 (Фаза 5A Fluent 2 Docked Blade в `main`):**
   1. **Фаза 5A (Fluent 2 Docked Blade & Micro-Pore Matrix):** Влито в `main` из `swarm-ui-blade-a354f326` (`b0a9fd3`). Добавлены `gui/theme_manager.py` (`ThemeManager`, Dark/Light + Sponge Ochre, Win11 DWM backdrop), `gui/dock_manager.py` (8 зон стыковки, 1/2/3+ мониторов, смешанный DPI), `gui/sponge_pore_widget.py` (9-поровая матрица 0/15/60 FPS + текстура микро-пор), `gui/agent_widgets.py` (`ContextChipBar`, `StepCard`, `AgentMiniBar`) и тесты `tests/test_v2_ui_components.py`.
+- [x] **2026-11-24 Чекпоинт 4 GupkaCommander 2.0 (Фаза 3 ReAct + CDP в `main`):**
+  1. **Фаза 3 (3-Tier Execution Router, Browser CDP Bridge & ReActEngine):** Влито в `main` из `swarm-phase3-react-c067ea9e` (`aef0745`). Добавлены `ExecutionTier` (`CASUAL_CHAT`/`FAST_PATH`/`AUTONOMOUS_AGENT`) в `core/routing/intent_router.py`, чистый Python-мост `BrowserCDPBridge` (`core/browser/cdp_bridge.py` с RFC6455 WebSocket без Playwright), `ToolRegistry`, `StepVerifier` и `ReActEngine` (`core/agent/`), а также тесты `tests/test_react_cdp_agent.py`.
 
 ## 3. Active Task (Current Focus)
-- **Feature:** Интеграция GupkaCommander 2.0 — Чекпоинт 3 (Фазы 1, 2, 4 и 5A Fluent 2 Docked Blade & Micro-Pore Matrix влиты в `main`).
-- **Status:** Фазы 1, 2, 4 и 5A объединены в `main` (без push); выполняется верификация и ожидание следующих этапов интеграции.
-- **Verification Plan:** Прогон `ruff check`, `mypy` и целевого набора `pytest` на `main` перед следующими слияниями.
+- **Feature:** Интеграция GupkaCommander 2.0 — Чекпоинт 4 (Фазы 1, 2, 3, 4 и 5A влиты в `main`).
+- **Status:** Фазы 1, 2, 3, 4 и 5A объединены в `main` (без push); выполняется верификация и ожидание следующих этапов интеграции (Фаза 5B).
+- **Verification Plan:** Прогон `ruff check`, `mypy` и целевого набора `pytest` на `main` перед финальной интеграцией.
 
 ## 4. Next Immediate Steps (Backlog)
 - [x] **Вектор 1:** Microsoft UI Automation (Tier 1 UIA) — мгновенный клик и ввод в окнах по именам элементов.
