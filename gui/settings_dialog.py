@@ -1,9 +1,10 @@
-"""Окно настроек приложения GupkaCommander в стиле Windows 11 Fluent Dark.
+"""Окно настроек приложения GupkaCommander в стиле Windows 11 Fluent 2.
 
 > [!NOTE]
 > **Назначение файла:** Графический диалог PySide6 для просмотра и сохранения настроек
-> config/settings.json (пороги VAD и паузы речи, параметры FailSafe, автозапуск llama-server,
-> показ мастера загрузки моделей), а также быстрого перехода к менеджеру моделей и папке данных.
+> config/settings.json: внешний вид и стыковка панели (8 позиций, монитор, тема,
+> размытие Acrylic/Mica), движки голоса (GigaAM v3 / Faster-Whisper, Qwen3-TTS / Piper),
+> пороги VAD, параметры FailSafe и автозапуск llama-server.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from typing import Any
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFormLayout,
@@ -32,47 +34,138 @@ from PySide6.QtWidgets import (
 
 from core.bootstrap import DependencyManager
 from core.paths import get_config_path, get_data_root, get_icon_path
-from gui.styles import FLUENT_DARK_THEME, PALETTE
+from gui.theme_manager import DARK_TOKENS, ThemeManager, ThemeMode, ThemeTokens
 
 logger = logging.getLogger(__name__)
 
-SETTINGS_EXTRA_STYLES = f"""
-QDialog#settingsDialog {{
-    background-color: {PALETTE.background};
-}}
-QFrame#sectionCard {{
-    background-color: {PALETTE.surface};
-    border: 1px solid {PALETTE.border};
-    border-radius: 8px;
-}}
-QLabel#settingsTitle {{
-    font-size: 18px;
-    font-weight: 600;
-    color: {PALETTE.text};
-}}
-QLabel#sectionHeader {{
-    font-size: 13px;
-    font-weight: 600;
-    color: {PALETTE.accent};
-}}
-QLabel#hintLabel {{
-    font-size: 12px;
-    color: {PALETTE.secondary};
-}}
-QSpinBox, QDoubleSpinBox {{
-    background-color: {PALETTE.surface_secondary};
-    color: {PALETTE.text};
-    border: 1px solid {PALETTE.border};
-    border-radius: 5px;
-    padding: 4px 8px;
-    min-width: 110px;
-}}
-"""
+_DOCK_POSITION_ITEMS: tuple[tuple[str, str], ...] = (
+    ("Сверху по центру", "top"),
+    ("Снизу по центру", "bottom"),
+    ("Слева (боковая панель)", "left"),
+    ("Справа (боковая панель)", "right"),
+    ("Верхний левый угол", "top_left"),
+    ("Верхний правый угол", "top_right"),
+    ("Нижний левый угол", "bottom_left"),
+    ("Нижний правый угол", "bottom_right"),
+)
+
+_MONITOR_ITEMS: tuple[tuple[str, str], ...] = (
+    ("Авто (активный под курсором)", "auto"),
+    ("Монитор 1", "1"),
+    ("Монитор 2", "2"),
+    ("Монитор 3", "3"),
+)
+
+_THEME_ITEMS: tuple[tuple[str, str], ...] = (
+    ("Системная (Windows 11)", "system"),
+    ("Тёмная", "dark"),
+    ("Светлая", "light"),
+)
+
+_BACKDROP_ITEMS: tuple[tuple[str, str], ...] = (
+    ("Acrylic (стекло)", "acrylic"),
+    ("Mica (матовый фон)", "mica"),
+)
+
+_STT_ENGINE_ITEMS: tuple[tuple[str, str], ...] = (
+    ("GigaAM v3 (ONNX)", "gigaam-v3"),
+    ("Faster-Whisper (INT8)", "faster-whisper"),
+)
+
+_TTS_ENGINE_ITEMS: tuple[tuple[str, str], ...] = (
+    ("Qwen3-TTS (GPU)", "qwen3-tts"),
+    ("Piper TTS (CPU)", "piper"),
+)
+
+
+def _build_settings_stylesheet(tokens: ThemeTokens) -> str:
+    """Формирует QSS для диалога настроек в палитре Windows 11 Fluent 2."""
+    return f"""
+    QDialog#settingsDialog {{
+        background-color: {tokens.background};
+        color: {tokens.text};
+        font-family: 'Segoe UI Variable Text', 'Segoe UI', 'Inter', sans-serif;
+    }}
+    QLabel {{
+        background: transparent;
+        border: none;
+        color: {tokens.text};
+    }}
+    QFrame#sectionCard {{
+        background-color: {tokens.surface_card};
+        border: 1px solid {tokens.border};
+        border-radius: 10px;
+    }}
+    QLabel#settingsTitle {{
+        font-size: 18px;
+        font-weight: 600;
+        color: {tokens.text};
+    }}
+    QLabel#sectionHeader {{
+        font-size: 13px;
+        font-weight: 700;
+        color: {tokens.sponge_ochre};
+    }}
+    QLabel#hintLabel {{
+        font-size: 12px;
+        color: {tokens.text_secondary};
+    }}
+    QSpinBox, QDoubleSpinBox, QComboBox {{
+        background-color: {tokens.surface};
+        color: {tokens.text};
+        border: 1px solid {tokens.border};
+        border-radius: 6px;
+        padding: 4px 10px;
+        min-width: 170px;
+    }}
+    QComboBox::drop-down {{
+        border: none;
+        width: 22px;
+    }}
+    QComboBox QAbstractItemView {{
+        background-color: {tokens.surface};
+        color: {tokens.text};
+        border: 1px solid {tokens.border};
+        selection-background-color: {tokens.accent_soft};
+        selection-color: {tokens.text};
+    }}
+    QCheckBox {{
+        color: {tokens.text};
+        spacing: 8px;
+    }}
+    QPushButton {{
+        background-color: {tokens.surface_chip};
+        color: {tokens.text};
+        border: 1px solid {tokens.border};
+        border-radius: 8px;
+        padding: 6px 14px;
+        font-weight: 500;
+    }}
+    QPushButton:hover {{
+        background-color: {tokens.surface_chip_hover};
+    }}
+    QPushButton#accentButton {{
+        background-color: {tokens.sponge_ochre_soft};
+        color: {tokens.sponge_ochre};
+        border: 1px solid {tokens.sponge_ochre_border};
+        font-weight: 700;
+    }}
+    QPushButton#accentButton:hover {{
+        background-color: {tokens.sponge_ochre};
+        color: #1B1D22;
+    }}
+    """
 
 
 def _default_settings() -> dict[str, Any]:
     """Возвращает базовую структуру настроек settings.json."""
     return {
+        "ui": {
+            "dock_position": "top",
+            "target_monitor": "auto",
+            "theme": "system",
+            "backdrop": "acrylic",
+        },
         "system": {
             "language": "ru",
             "hotkeys": {
@@ -91,11 +184,19 @@ def _default_settings() -> dict[str, Any]:
             "ducking_enabled": True,
         },
         "models": {
+            "stt": {
+                "engine": "gigaam-v3",
+                "fallback_engine": "faster-whisper",
+            },
+            "tts": {
+                "engine": "qwen3-tts",
+                "fallback_engine": "piper",
+            },
             "llm": {
                 "autostart": True,
                 "n_gpu_layers": 99,
                 "context_window": 4096,
-            }
+            },
         },
     }
 
@@ -111,8 +212,30 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return merged
 
 
+def _populate_combo(
+    combo: QComboBox,
+    items: tuple[tuple[str, str], ...],
+    selected_value: str,
+) -> None:
+    """Заполняет выпадающий список парами (подпись, значение) и выбирает текущее."""
+    combo.clear()
+    norm_selected = str(selected_value).strip().lower()
+    selected_idx = 0
+    for idx, (label, value) in enumerate(items):
+        combo.addItem(label, value)
+        if value.lower() == norm_selected:
+            selected_idx = idx
+    combo.setCurrentIndex(selected_idx)
+
+
+def _combo_value(combo: QComboBox, default: str) -> str:
+    """Возвращает data-значение выбранного пункта QComboBox."""
+    data = combo.currentData()
+    return str(data) if data is not None else default
+
+
 class SettingsDialog(QDialog):
-    """Окно системных настроек GupkaCommander."""
+    """Окно системных настроек GupkaCommander 2.0."""
 
     def __init__(
         self,
@@ -120,8 +243,10 @@ class SettingsDialog(QDialog):
         dep_manager: DependencyManager | None = None,
         on_open_models: Callable[[], None] | None = None,
         parent: QWidget | None = None,
+        *,
+        theme_tokens: ThemeTokens | None = None,
     ) -> None:
-        """Инициализация окна настроек с поддержкой внедрения путей для тестов."""
+        """Инициализация окна настроек с поддержкой внедрения путей и темы для тестов."""
         super().__init__(parent)
         self._settings_path = (
             settings_path if settings_path is not None else get_config_path("settings.json")
@@ -130,17 +255,32 @@ class SettingsDialog(QDialog):
         self._on_open_models = on_open_models
         self._data: dict[str, Any] = self._load_settings()
 
+        if theme_tokens is not None:
+            self._tokens: ThemeTokens = theme_tokens
+        else:
+            saved_theme = str(self._data.get("ui", {}).get("theme", "system"))
+            try:
+                mode = ThemeMode(saved_theme.strip().lower())
+            except ValueError:
+                mode = ThemeMode.SYSTEM
+            self._tokens = ThemeManager(self, mode=mode).tokens
+
         self.setObjectName("settingsDialog")
         self.setWindowTitle("GupkaCommander — Настройки")
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(520)
         self.setModal(True)
-        self.setStyleSheet(FLUENT_DARK_THEME + SETTINGS_EXTRA_STYLES)
 
         icon_path = get_icon_path()
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 
         self._build_ui()
+        self.apply_theme(self._tokens)
+
+    def apply_theme(self, tokens: ThemeTokens = DARK_TOKENS) -> None:
+        """Применяет дизайн-токены Dark/Light ко всему диалогу настроек."""
+        self._tokens = tokens
+        self.setStyleSheet(_build_settings_stylesheet(tokens))
 
     def _load_settings(self) -> dict[str, Any]:
         """Загружает настройки из settings.json с откатом на значения по умолчанию."""
@@ -165,25 +305,89 @@ class SettingsDialog(QDialog):
         title.setObjectName("settingsTitle")
         root.addWidget(title)
 
+        root.addWidget(self._build_appearance_section())
         root.addWidget(self._build_voice_section())
         root.addWidget(self._build_safety_and_llm_section())
         root.addLayout(self._build_tools_row())
         root.addLayout(self._build_footer_row())
 
-    def _build_voice_section(self) -> QFrame:
-        """Секция параметров голосового контура (VAD и пауза)."""
+    def _build_appearance_section(self) -> QFrame:
+        """Секция внешнего вида Windows 11 Fluent 2 и параметров стыковки (8 зон)."""
         card = QFrame(self)
         card.setObjectName("sectionCard")
         layout = QVBoxLayout(card)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
 
-        header = QLabel("Голосовой контур (CPU)", card)
+        header = QLabel("Внешний вид и стыковка (Windows 11)", card)
         header.setObjectName("sectionHeader")
         layout.addWidget(header)
 
         form = QFormLayout()
         form.setSpacing(8)
+        ui_cfg = self._data["ui"]
+
+        self.dock_position_combo = QComboBox(card)
+        _populate_combo(
+            self.dock_position_combo,
+            _DOCK_POSITION_ITEMS,
+            str(ui_cfg.get("dock_position", "top")),
+        )
+        form.addRow("Позиция панели:", self.dock_position_combo)
+
+        self.target_monitor_combo = QComboBox(card)
+        _populate_combo(
+            self.target_monitor_combo,
+            _MONITOR_ITEMS,
+            str(ui_cfg.get("target_monitor", "auto")),
+        )
+        form.addRow("Целевой монитор:", self.target_monitor_combo)
+
+        self.theme_combo = QComboBox(card)
+        _populate_combo(self.theme_combo, _THEME_ITEMS, str(ui_cfg.get("theme", "system")))
+        form.addRow("Тема оформления:", self.theme_combo)
+
+        self.backdrop_combo = QComboBox(card)
+        _populate_combo(
+            self.backdrop_combo, _BACKDROP_ITEMS, str(ui_cfg.get("backdrop", "acrylic"))
+        )
+        form.addRow("Эффект стекла (DWM):", self.backdrop_combo)
+
+        layout.addLayout(form)
+        return card
+
+    def _build_voice_section(self) -> QFrame:
+        """Секция голосового контура: движки STT/TTS, порог VAD и пауза речи."""
+        card = QFrame(self)
+        card.setObjectName("sectionCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        header = QLabel("Голосовой контур (STT / TTS / VAD)", card)
+        header.setObjectName("sectionHeader")
+        layout.addWidget(header)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        stt_cfg = self._data["models"]["stt"]
+        self.stt_engine_combo = QComboBox(card)
+        _populate_combo(
+            self.stt_engine_combo,
+            _STT_ENGINE_ITEMS,
+            str(stt_cfg.get("engine", "gigaam-v3")),
+        )
+        form.addRow("Распознавание речи (STT):", self.stt_engine_combo)
+
+        tts_cfg = self._data["models"]["tts"]
+        self.tts_engine_combo = QComboBox(card)
+        _populate_combo(
+            self.tts_engine_combo,
+            _TTS_ENGINE_ITEMS,
+            str(tts_cfg.get("engine", "qwen3-tts")),
+        )
+        form.addRow("Синтез речи (TTS):", self.tts_engine_combo)
 
         audio_cfg = self._data["audio"]
         self.vad_threshold_spin = QDoubleSpinBox(card)
@@ -214,13 +418,12 @@ class SettingsDialog(QDialog):
         header.setObjectName("sectionHeader")
         layout.addWidget(header)
 
-        form = QFormLayout()
-        form.setSpacing(8)
-
         hotkeys_hint = QLabel("Вызов панели: Alt+Space   •   Экстренная остановка: Esc", card)
         hotkeys_hint.setObjectName("hintLabel")
         layout.addWidget(hotkeys_hint)
 
+        form = QFormLayout()
+        form.setSpacing(8)
         failsafe_cfg = self._data["system"]["mouse_failsafe"]
         self.shake_threshold_spin = QSpinBox(card)
         self.shake_threshold_spin.setRange(150, 1000)
@@ -242,7 +445,6 @@ class SettingsDialog(QDialog):
         )
         self.show_bootstrap_cb.setChecked(not self._dep_manager.is_skip_prompt_saved())
         layout.addWidget(self.show_bootstrap_cb)
-
         return card
 
     def _build_tools_row(self) -> QHBoxLayout:
@@ -276,7 +478,6 @@ class SettingsDialog(QDialog):
         self.save_btn.setObjectName("accentButton")
         self.save_btn.clicked.connect(self._handle_save)
         row.addWidget(self.save_btn)
-
         return row
 
     def _handle_open_models(self) -> None:
@@ -300,12 +501,20 @@ class SettingsDialog(QDialog):
 
     def save_settings(self) -> dict[str, Any]:
         """Применяет значения виджетов и сохраняет settings.json и bootstrap_state.json."""
+        self._data["ui"]["dock_position"] = _combo_value(self.dock_position_combo, "top")
+        self._data["ui"]["target_monitor"] = _combo_value(self.target_monitor_combo, "auto")
+        self._data["ui"]["theme"] = _combo_value(self.theme_combo, "system")
+        self._data["ui"]["backdrop"] = _combo_value(self.backdrop_combo, "acrylic")
+
+        self._data["models"]["stt"]["engine"] = _combo_value(self.stt_engine_combo, "gigaam-v3")
+        self._data["models"]["tts"]["engine"] = _combo_value(self.tts_engine_combo, "qwen3-tts")
+        self._data["models"]["llm"]["autostart"] = bool(self.llm_autostart_cb.isChecked())
+
         self._data["audio"]["vad_threshold"] = round(float(self.vad_threshold_spin.value()), 2)
         self._data["audio"]["silence_duration_ms"] = int(self.silence_ms_spin.value())
         self._data["system"]["mouse_failsafe"]["shake_threshold_pixels"] = int(
             self.shake_threshold_spin.value()
         )
-        self._data["models"]["llm"]["autostart"] = bool(self.llm_autostart_cb.isChecked())
 
         self._settings_path.parent.mkdir(parents=True, exist_ok=True)
         self._settings_path.write_text(
