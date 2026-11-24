@@ -578,35 +578,150 @@ class FallbackRuleEngine:
         return f"Локальный ИИ-сервер недоступен. Запрос '{prompt}' принят в автономном режиме."
 
 
+DEFAULT_MODEL_NAME: str = "qwen3-vl-4b-instruct"
+QWEN35_MODEL_NAME: str = "qwen3.5-4b"
+
+
+class ThinkTagFilter:
+    """Потоковый фильтр тегов внутренних рассуждений `<think>...</think>`.
+
+    Корректно вырезает блоки рассуждений даже в случае разбиения открывающего
+    или закрывающего тега между несколькими SSE-чанками.
+    """
+
+    _OPEN_TAG: str = "<think>"
+    _CLOSE_TAG: str = "</think>"
+
+    def __init__(self) -> None:
+        """Инициализация состояния потокового фильтра."""
+        self._in_think: bool = False
+        self._buffer: str = ""
+        self._has_emitted: bool = False
+        self._trim_leading_ws: bool = False
+
+    @staticmethod
+    def _trailing_tag_prefix_len(text_lower: str, tag: str) -> int:
+        """Возвращает длину суффикса строки, совпадающего с префиксом тега."""
+        max_len: int = min(len(text_lower), len(tag) - 1)
+        for length in range(max_len, 0, -1):
+            if text_lower.endswith(tag[:length]):
+                return length
+        return 0
+
+    def _consume_in_think(self, lower_buf: str) -> bool:
+        """Обрабатывает буфер в режиме рассуждений. Возвращает True для продолжения цикла."""
+        close_idx: int = lower_buf.find(self._CLOSE_TAG)
+        if close_idx != -1:
+            self._buffer = self._buffer[close_idx + len(self._CLOSE_TAG) :]
+            self._in_think = False
+            if not self._has_emitted:
+                self._trim_leading_ws = True
+            return True
+
+        keep: int = self._trailing_tag_prefix_len(lower_buf, self._CLOSE_TAG)
+        self._buffer = self._buffer[len(self._buffer) - keep :] if keep else ""
+        return False
+
+    def feed(self, chunk: str) -> str:
+        """Фильтрует очередной чанк текста и возвращает безопасную для показа/TTS часть."""
+        if not chunk:
+            return ""
+
+        self._buffer += chunk
+        out_parts: list[str] = []
+
+        while self._buffer:
+            lower_buf: str = self._buffer.lower()
+            if self._in_think:
+                if self._consume_in_think(lower_buf):
+                    continue
+                break
+
+            if self._trim_leading_ws:
+                stripped = self._buffer.lstrip()
+                if not stripped:
+                    self._buffer = ""
+                    break
+                self._buffer = stripped
+                self._trim_leading_ws = False
+                lower_buf = self._buffer.lower()
+
+            open_idx: int = lower_buf.find(self._OPEN_TAG)
+            if open_idx != -1:
+                visible = self._buffer[:open_idx]
+                if visible:
+                    out_parts.append(visible)
+                    self._has_emitted = True
+                self._buffer = self._buffer[open_idx + len(self._OPEN_TAG) :]
+                self._in_think = True
+                continue
+
+            keep: int = self._trailing_tag_prefix_len(lower_buf, self._OPEN_TAG)
+            split_at: int = len(self._buffer) - keep
+            visible = self._buffer[:split_at]
+            if visible:
+                out_parts.append(visible)
+                self._has_emitted = True
+            self._buffer = self._buffer[split_at:]
+            break
+
+        return "".join(out_parts)
+
+    def flush(self) -> str:
+        """Сбрасывает оставшийся незадержанный текст после завершения потока."""
+        if self._in_think:
+            self._buffer = ""
+            return ""
+        remaining: str = self._buffer.lstrip() if self._trim_leading_ws else self._buffer
+        self._buffer = ""
+        self._trim_leading_ws = False
+        if remaining:
+            self._has_emitted = True
+        return remaining
+
+
+def strip_thinking_tags(text: str) -> str:
+    """Удаляет блоки `<think>...</think>` из готового текстового ответа модели."""
+    if not text:
+        return ""
+    tag_filter = ThinkTagFilter()
+    cleaned: str = tag_filter.feed(text) + tag_filter.flush()
+    return cleaned.strip()
+
+
 class LocalLLMClient:
     """OpenAI-совместимый клиент для локального инференса (llama-server/vLLM)."""
 
     def __init__(
         self,
         api_base: str | None = None,
-        model_name: str = "qwen3-vl-4b-instruct",
+        model_name: str | None = None,
         timeout_seconds: float = 30.0,
         router: IntentRouter | None = None,
         session: requests.Session | None = None,
+        enable_thinking: bool = False,
     ) -> None:
         """Инициализация клиента локального LLM.
 
         Args:
             api_base: URL-адрес сервера API (по умолчанию http://127.0.0.1:8080/v1).
-            model_name: Название используемой модели инференса.
+            model_name: Модель инференса (из LOCAL_LLM_MODEL или qwen3-vl-4b-instruct).
             timeout_seconds: Таймаут сетевых запросов в секундах.
             router: Экземпляр IntentRouter для резервной логики.
             session: Сессия requests (создается новая при отсутствии).
+            enable_thinking: Разрешать ли модели режим внутренних рассуждений.
         """
         env_base = os.getenv("LOCAL_LLM_API_BASE", "http://127.0.0.1:8080/v1")
         selected_base = api_base if api_base is not None else env_base
+        env_model = os.getenv("LOCAL_LLM_MODEL", DEFAULT_MODEL_NAME)
         self.api_base: str = selected_base.rstrip("/")
-        self.model_name: str = model_name
+        self.model_name: str = model_name if model_name is not None else env_model
         self.timeout_seconds: float = timeout_seconds
         self.session: requests.Session = session or requests.Session()
         self.router: IntentRouter = router or IntentRouter()
         self.fallback_engine: FallbackRuleEngine = FallbackRuleEngine(router=self.router)
         self.tools: list[dict[str, Any]] = SYSTEM_TOOLS
+        self.enable_thinking: bool = enable_thinking
 
     def is_healthy(self) -> bool:
         """Проверка доступности локального инференс-сервера."""
@@ -617,7 +732,40 @@ class LocalLLMClient:
         except requests.RequestException:
             return False
 
-    def generate_response(self, prompt: str, system_prompt: str | None = None) -> str:
+    @staticmethod
+    def _build_messages(
+        system_prompt: str,
+        user_content: Any,
+        history: list[dict[str, str]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Формирует массив сообщений с опциональной многоходовой историей диалога."""
+        messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+        if history:
+            for item in history:
+                role: str = str(item.get("role", "")).strip()
+                content: str = str(item.get("content", "")).strip()
+                if role in ("user", "assistant") and content:
+                    messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": user_content})
+        return messages
+
+    def _apply_thinking_option(
+        self,
+        payload: dict[str, Any],
+        enable_thinking: bool | None,
+    ) -> None:
+        """Добавляет chat_template_kwargs для отключения thinking-режима Qwen3.5."""
+        use_thinking: bool = self.enable_thinking if enable_thinking is None else enable_thinking
+        if not use_thinking:
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
+
+    def generate_response(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        history: list[dict[str, str]] | None = None,
+        enable_thinking: bool | None = None,
+    ) -> str:
         """Генерация текстового ответа на запрос пользователя.
 
         При недоступности сервера переключается на FallbackRuleEngine.
@@ -628,13 +776,11 @@ class LocalLLMClient:
         url = f"{self.api_base}/chat/completions"
         payload: dict[str, Any] = {
             "model": self.model_name,
-            "messages": [
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": prompt},
-            ],
+            "messages": self._build_messages(sys_prompt, prompt, history=history),
             "temperature": 0.3,
             "max_tokens": 512,
         }
+        self._apply_thinking_option(payload, enable_thinking)
 
         try:
             resp = self.session.post(url, json=payload, timeout=self.timeout_seconds)
@@ -642,9 +788,11 @@ class LocalLLMClient:
                 data: dict[str, Any] = resp.json()
                 choices: list[dict[str, Any]] = data.get("choices", [])
                 if choices:
-                    content: str = choices[0].get("message", {}).get("content", "")
-                    if content:
-                        return content.strip()
+                    raw_content = choices[0].get("message", {}).get("content")
+                    if isinstance(raw_content, str):
+                        cleaned = strip_thinking_tags(raw_content)
+                        if cleaned:
+                            return cleaned
         except requests.RequestException as err:
             logger.warning("Локальный LLM недоступен (%s). Переключение на fallback.", err)
 
@@ -652,6 +800,8 @@ class LocalLLMClient:
 
     def _parse_sse_line(self, raw_line: str | bytes) -> tuple[str | None, bool]:
         """Парсинг отдельной строки Server-Sent Events (SSE).
+
+        Игнорирует поле `reasoning_content` для предотвращения озвучивания рассуждений.
 
         Returns:
             tuple[str | None, bool]: (текстовый фрагмент дельты, флаг окончания [DONE]).
@@ -671,14 +821,16 @@ class LocalLLMClient:
             if not choices:
                 return None, False
             delta: dict[str, Any] = choices[0].get("delta", {})
-            content: str = delta.get("content", "")
+            raw_content = delta.get("content")
+            content: str = raw_content if isinstance(raw_content, str) else ""
             return (content if content else None), False
         except (json.JSONDecodeError, TypeError, KeyError):
             return None, False
 
     def _read_sse_stream(self, resp: requests.Response) -> Iterator[str]:
-        """Построчное чтение и распаковка текстовых чанков из ответа SSE."""
+        """Построчное чтение и фильтрация `<think>`-тегов в потоке SSE."""
         resp.encoding = "utf-8"
+        tag_filter = ThinkTagFilter()
         for raw_line in resp.iter_lines(decode_unicode=True):
             if not raw_line:
                 continue
@@ -686,7 +838,13 @@ class LocalLLMClient:
             if is_done:
                 break
             if chunk is not None:
-                yield chunk
+                filtered = tag_filter.feed(chunk)
+                if filtered:
+                    yield filtered
+
+        tail = tag_filter.flush()
+        if tail:
+            yield tail
 
     def _fallback_stream(self, text: str) -> Iterator[str]:
         """Генерация потока токенов из запасного ответа движка правил."""
@@ -698,6 +856,8 @@ class LocalLLMClient:
         self,
         user_text: str,
         system_prompt: str | None = None,
+        history: list[dict[str, str]] | None = None,
+        enable_thinking: bool | None = None,
     ) -> Iterator[str]:
         """Потоковая генерация ответа через Server-Sent Events (SSE).
 
@@ -706,6 +866,8 @@ class LocalLLMClient:
         Args:
             user_text: Текст запроса пользователя.
             system_prompt: Опциональный системный промпт.
+            history: Опциональная история предыдущих ходов диалога.
+            enable_thinking: Локальное переопределение thinking-режима.
 
         Yields:
             str: Текстовые токены ответа по мере их генерации.
@@ -720,14 +882,12 @@ class LocalLLMClient:
         url = f"{self.api_base}/chat/completions"
         payload: dict[str, Any] = {
             "model": self.model_name,
-            "messages": [
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": clean_text},
-            ],
+            "messages": self._build_messages(sys_prompt, clean_text, history=history),
             "temperature": 0.3,
             "max_tokens": 512,
             "stream": True,
         }
+        self._apply_thinking_option(payload, enable_thinking)
 
         streamed = False
         try:
@@ -756,6 +916,8 @@ class LocalLLMClient:
         prompt: str,
         image_b64: str | None = None,
         system_prompt: str | None = None,
+        history: list[dict[str, str]] | None = None,
+        enable_thinking: bool | None = None,
     ) -> list[dict[str, Any]]:
         """Генерация плана системных действий (Tool Calling) по промпту и кадру экрана.
 
@@ -785,18 +947,13 @@ class LocalLLMClient:
 
         payload: dict[str, Any] = {
             "model": self.model_name,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": sys_prompt,
-                },
-                {"role": "user", "content": user_content},
-            ],
+            "messages": self._build_messages(sys_prompt, user_content, history=history),
             "tools": self.tools,
             "tool_choice": "auto",
             "temperature": 0.1,
             "max_tokens": 1024,
         }
+        self._apply_thinking_option(payload, enable_thinking)
 
         try:
             resp = self.session.post(url, json=payload, timeout=self.timeout_seconds)
