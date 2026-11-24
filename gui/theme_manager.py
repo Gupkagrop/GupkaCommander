@@ -350,6 +350,8 @@ def _blade_corner_qss(dock_position: DockPosition | str | None, corner_radius: i
 
 def _blade_base_qss(tokens: ThemeTokens, radii_css: str) -> str:
     """Формирует базовые правила QSS для оболочки Docked Blade и поля ввода."""
+    focus_bg = "rgba(255, 255, 255, 0.05)" if tokens.is_dark else "rgba(255, 255, 255, 0.72)"
+    hover_bg = "rgba(255, 255, 255, 0.03)" if tokens.is_dark else "rgba(24, 28, 36, 0.03)"
     return f"""
     QWidget {{
         font-family: 'Segoe UI Variable Text', 'Segoe UI', 'Inter', sans-serif;
@@ -361,22 +363,37 @@ def _blade_base_qss(tokens: ThemeTokens, radii_css: str) -> str:
         border: none;
     }}
 
-    QFrame#bladeFrame,
-    QFrame#spotlightBar {{
+    QFrame#bladeFrame {{
         background-color: {tokens.surface_glass};
         border: 1px solid {tokens.border};
         {radii_css}
     }}
 
-    QLineEdit#searchInput {{
+    QFrame#spotlightBar {{
         background-color: transparent;
         border: none;
+        {radii_css}
+    }}
+
+    QLineEdit#searchInput {{
+        background-color: transparent;
+        border: 1px solid transparent;
+        border-radius: 10px;
         color: {tokens.text};
-        font-size: 15px;
+        font-size: 14.5px;
         font-weight: 400;
-        padding: 6px 4px;
+        padding: 6px 10px;
         selection-background-color: {tokens.accent_soft};
         selection-color: {tokens.text};
+    }}
+
+    QLineEdit#searchInput:hover {{
+        background-color: {hover_bg};
+    }}
+
+    QLineEdit#searchInput:focus {{
+        background-color: {focus_bg};
+        border: 1px solid {tokens.sponge_ochre_border};
     }}
     """
 
@@ -389,9 +406,11 @@ def _blade_widgets_qss(tokens: ThemeTokens) -> str:
         color: {tokens.text_secondary};
         border: 1px solid {tokens.border_subtle};
         border-radius: 11px;
-        padding: 3px 10px;
-        font-size: 11px;
-        font-weight: 600;
+        min-height: 20px;
+        max-height: 22px;
+        padding: 0px 9px;
+        font-size: 10.5px;
+        font-weight: 500;
     }}
 
     QPushButton#contextChip:hover {{
@@ -404,6 +423,7 @@ def _blade_widgets_qss(tokens: ThemeTokens) -> str:
         background-color: {tokens.sponge_ochre_soft};
         color: {tokens.sponge_ochre};
         border: 1px solid {tokens.sponge_ochre_border};
+        font-weight: 600;
     }}
 
     QFrame#stepCard {{

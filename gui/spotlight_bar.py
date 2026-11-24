@@ -12,16 +12,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import override
 
-from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
+    QEnterEvent,
     QIcon,
     QKeyEvent,
+    QLinearGradient,
     QMouseEvent,
     QPainter,
     QPainterPath,
     QPaintEvent,
     QPen,
+    QRadialGradient,
     QShowEvent,
 )
 from PySide6.QtWidgets import (
@@ -110,7 +113,7 @@ def _status_badge_qss_for_tokens(state: str, tokens: ThemeTokens) -> str:
     return (
         "QLabel#statusBadge {"
         f"  color: {fg}; background-color: {bg}; border: 1px solid {border};"
-        "  border-radius: 12px; padding: 4px 11px;"
+        "  border-radius: 11px; min-height: 20px; max-height: 22px; padding: 1px 10px;"
         "  font-family: 'Segoe UI Variable Text', 'Segoe UI', 'Inter', sans-serif;"
         "  font-size: 11px; font-weight: 600;"
         "}"
@@ -119,6 +122,7 @@ def _status_badge_qss_for_tokens(state: str, tokens: ThemeTokens) -> str:
 
 def _spotlight_controls_qss(tokens: ThemeTokens) -> str:
     """Дополнительные правила QSS для кнопок, разделителя и карточек SpotlightBar."""
+    pressed_bg = "rgba(255, 255, 255, 0.08)" if tokens.is_dark else "rgba(24, 28, 36, 0.08)"
     return f"""
     QFrame#drawerDivider {{
         background-color: {tokens.divider};
@@ -129,15 +133,21 @@ def _spotlight_controls_qss(tokens: ThemeTokens) -> str:
 
     QPushButton#toggleDrawerBtn,
     QPushButton#actionIconBtn {{
-        background-color: {tokens.surface_chip};
+        background-color: transparent;
         border: 1px solid transparent;
-        border-radius: 10px;
+        border-radius: 8px;
         padding: 0px;
     }}
 
     QPushButton#toggleDrawerBtn:hover,
     QPushButton#actionIconBtn:hover {{
         background-color: {tokens.surface_chip_hover};
+        border: 1px solid {tokens.border_subtle};
+    }}
+
+    QPushButton#toggleDrawerBtn:pressed,
+    QPushButton#actionIconBtn:pressed {{
+        background-color: {pressed_bg};
         border: 1px solid {tokens.border};
     }}
 
@@ -200,7 +210,10 @@ class VectorIconButton(QPushButton):
         self._kind: str = kind
         self._muted: bool = False
         self._expanded: bool = False
+        self._inverted: bool = False
+        self._hovered: bool = False
         self._tokens: ThemeTokens = tokens
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedSize(QSize(32, 32))
 
@@ -226,6 +239,27 @@ class VectorIconButton(QPushButton):
         self._expanded = expanded
         self.update()
 
+    def set_inverted(self, inverted: bool) -> None:
+        """Инвертирует направление шеврона при стыковке к нижней грани экрана."""
+        if self._inverted == inverted:
+            return
+        self._inverted = bool(inverted)
+        self.update()
+
+    @override
+    def enterEvent(self, event: QEnterEvent) -> None:
+        """Подсвечивает векторную иконку при наведении курсора."""
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    @override
+    def leaveEvent(self, event: QEvent) -> None:
+        """Возвращает стандартный контраст иконки при уходе курсора."""
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
     @override
     def paintEvent(self, event: QPaintEvent) -> None:
         """Отрисовка фона кнопки по QSS и чёткой векторной иконки поверх него."""
@@ -242,7 +276,10 @@ class VectorIconButton(QPushButton):
 
     def _paint_mic(self, painter: QPainter) -> None:
         """Рисует векторный микрофон и перечёркивание в состоянии mute."""
-        color = QColor(self._tokens.danger if self._muted else self._tokens.text)
+        if self._muted:
+            color = QColor(self._tokens.danger)
+        else:
+            color = QColor(self._tokens.text if self._hovered else self._tokens.text_secondary)
         pen = QPen(color, 1.7)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
@@ -261,13 +298,15 @@ class VectorIconButton(QPushButton):
             painter.drawLine(9, 8, 23, 23)
 
     def _paint_chevron(self, painter: QPainter) -> None:
-        """Рисует векторный шеврон вниз (свёрнуто) или вверх (раскрыто)."""
-        pen = QPen(QColor(self._tokens.text_secondary), 1.9)
+        """Рисует векторный шеврон с учётом раскрытия и направления докинга."""
+        color = QColor(self._tokens.text if self._hovered else self._tokens.text_secondary)
+        pen = QPen(color, 1.85)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
 
-        if self._expanded:
+        point_up = self._expanded ^ self._inverted
+        if point_up:
             painter.drawLine(11, 18, 16, 13)
             painter.drawLine(16, 13, 21, 18)
             return
@@ -277,7 +316,8 @@ class VectorIconButton(QPushButton):
 
     def _paint_settings(self, painter: QPainter) -> None:
         """Рисует минималистичную иконку настроек (ползунки управления)."""
-        pen = QPen(QColor(self._tokens.text_secondary), 1.6)
+        color = QColor(self._tokens.text if self._hovered else self._tokens.text_secondary)
+        pen = QPen(color, 1.6)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
         painter.setBrush(QColor(self._tokens.surface))
@@ -292,7 +332,7 @@ class VectorIconButton(QPushButton):
 
 
 class MicroPoreDragStrip(QWidget):
-    """Тактильная полоса захвата с кешированным микропористым узором у края стыковки."""
+    """Тактильная тёплая ручка захвата на свободной грани панели."""
 
     def __init__(
         self,
@@ -305,7 +345,9 @@ class MicroPoreDragStrip(QWidget):
         self.setObjectName("microPoreDragStrip")
         self._tokens: ThemeTokens = tokens
         self._edge_at_bottom: bool = edge_at_bottom
-        self.setFixedHeight(14)
+        self._hovered: bool = False
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setFixedHeight(12)
         self.setCursor(Qt.CursorShape.SizeAllCursor)
         self.setToolTip("Перетащите панель для перемещения или стыковки")
 
@@ -315,37 +357,48 @@ class MicroPoreDragStrip(QWidget):
         self.update()
 
     def set_edge_at_bottom(self, at_bottom: bool) -> None:
-        """Переключает положение тонкой акцентной кромки (верх / низ)."""
+        """Сохраняет положение ручки относительно свободной грани (верх / низ)."""
         self._edge_at_bottom = bool(at_bottom)
         self.update()
 
     @override
+    def enterEvent(self, event: QEnterEvent) -> None:
+        """Усиливает тёплое свечение пилюли захвата при наведении курсора."""
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    @override
+    def leaveEvent(self, event: QEvent) -> None:
+        """Возвращает деликатную яркость ручки захвата при уходе курсора."""
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    @override
     def paintEvent(self, event: QPaintEvent) -> None:
-        """Рисует микропористый узор из кеша, акцентную линию края и пилюлю захвата."""
+        """Рисует деликатный микропористый фон и тёплую ручку Sponge Ochre."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         dpr = max(1.0, float(self.devicePixelRatioF()))
         tile = build_micro_pore_tile(self._tokens, dpr=dpr)
+        painter.setOpacity(0.65 if self._hovered else 0.35)
         painter.drawTiledPixmap(self.rect(), tile)
+        painter.setOpacity(1.0)
 
-        # Тонкая акцентная линия Sponge Ochre вдоль внешнего стыкованного края
-        accent = QColor(self._tokens.sponge_ochre)
-        accent.setAlpha(155)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(accent)
-        line_y = float(self.height() - 1) if self._edge_at_bottom else 0.0
-        painter.drawRect(QRectF(0.0, line_y, float(self.width()), 1.5))
-
-        # Центральная тактильная пилюля захвата
-        pill_w = min(40.0, max(20.0, self.width() * 0.14))
-        pill_h = 3.0
+        # Центральная тактильная пилюля захвата в цвете Sponge Ochre
+        base_w = 46.0 if self._hovered else 36.0
+        pill_w = min(base_w, max(24.0, self.width() * 0.14))
+        pill_h = 3.2
         pill_x = (self.width() - pill_w) / 2.0
         pill_y = (self.height() - pill_h) / 2.0
+
         pill_color = QColor(self._tokens.sponge_ochre)
-        pill_color.setAlpha(205)
+        pill_color.setAlpha(230 if self._hovered else 160)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(pill_color)
-        painter.drawRoundedRect(QRectF(pill_x, pill_y, pill_w, pill_h), 1.5, 1.5)
+        painter.drawRoundedRect(QRectF(pill_x, pill_y, pill_w, pill_h), 1.6, 1.6)
         painter.end()
 
 
@@ -625,52 +678,54 @@ class SpotlightBar(QWidget):
         """Строит строку ввода с тактильным SpongePoreWidget, бейджем и кнопками."""
         input_row = QWidget(parent)
         input_row.setStyleSheet("background: transparent;")
-        layout = QHBoxLayout(input_row)
-        layout.setContentsMargins(14, 8, 12, 8)
-        layout.setSpacing(10)
+        self._input_row_layout = QHBoxLayout(input_row)
+        self._input_row_layout.setContentsMargins(14, 8, 12, 6)
+        self._input_row_layout.setSpacing(10)
 
-        self._sponge_pore = SpongePoreWidget(input_row, tokens=tokens, size=32)
-        self._sponge_pore.setFixedSize(32, 32)
+        self._sponge_pore = SpongePoreWidget(input_row, tokens=tokens, size=34)
+        self._sponge_pore.setFixedSize(34, 34)
         self._search_icon: QWidget = self._sponge_pore
-        layout.addWidget(self._sponge_pore)
+        self._input_row_layout.addWidget(self._sponge_pore)
 
         self._search_input = QLineEdit(input_row)
         self._search_input.setObjectName("searchInput")
         self._search_input.setPlaceholderText("Спросите Губку или введите команду...")
         self._search_input.returnPressed.connect(self._on_enter_pressed)
-        layout.addWidget(self._search_input, stretch=1)
+        self._input_row_layout.addWidget(self._search_input, stretch=1)
 
         self._status_badge = QLabel(get_status_label_ru("IDLE"), input_row)
         self._status_badge.setObjectName("statusBadge")
         self._status_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self._status_badge, alignment=Qt.AlignmentFlag.AlignVCenter)
+        self._input_row_layout.addWidget(
+            self._status_badge, alignment=Qt.AlignmentFlag.AlignVCenter
+        )
 
         self._mic_btn = VectorIconButton("mic", input_row, tokens=tokens)
         self._mic_btn.setObjectName("actionIconBtn")
         self._mic_btn.setToolTip("Отключить / включить микрофон")
         self._mic_btn.clicked.connect(self._on_mic_btn_clicked)
-        layout.addWidget(self._mic_btn)
+        self._input_row_layout.addWidget(self._mic_btn)
 
         self._toggle_drawer_btn = VectorIconButton("drawer", input_row, tokens=tokens)
         self._toggle_drawer_btn.setObjectName("toggleDrawerBtn")
         self._toggle_drawer_btn.setToolTip("Показать или скрыть историю диалога")
         self._toggle_drawer_btn.clicked.connect(self._on_toggle_drawer_clicked)
-        layout.addWidget(self._toggle_drawer_btn)
+        self._input_row_layout.addWidget(self._toggle_drawer_btn)
 
         self._settings_btn = VectorIconButton("settings", input_row, tokens=tokens)
         self._settings_btn.setObjectName("actionIconBtn")
         self._settings_btn.setToolTip("Открыть настройки")
         self._settings_btn.clicked.connect(self._on_settings_btn_clicked)
-        layout.addWidget(self._settings_btn)
+        self._input_row_layout.addWidget(self._settings_btn)
         return input_row
 
     def _build_context_chip_row(self, parent: QWidget, tokens: ThemeTokens) -> QWidget:
         """Создаёт обёртку для полосы контекстных чипов Command Deck."""
         wrap = QWidget(parent)
         wrap.setStyleSheet("background: transparent;")
-        layout = QHBoxLayout(wrap)
-        layout.setContentsMargins(14, 0, 14, 9)
-        layout.setSpacing(0)
+        self._chip_bar_layout = QHBoxLayout(wrap)
+        self._chip_bar_layout.setContentsMargins(14, 0, 14, 6)
+        self._chip_bar_layout.setSpacing(0)
 
         self._context_chip_bar = ContextChipBar(wrap, tokens=tokens)
         self._context_chip_bar.set_context(
@@ -681,7 +736,7 @@ class SpotlightBar(QWidget):
             voice_active=True,
         )
         self._context_chip_bar.chip_clicked.connect(self._on_context_chip_clicked)
-        layout.addWidget(self._context_chip_bar)
+        self._chip_bar_layout.addWidget(self._context_chip_bar)
         return wrap
 
     def _connect_managers(self) -> None:
@@ -690,27 +745,32 @@ class SpotlightBar(QWidget):
         self._dock_manager.screens_changed.connect(self._on_screens_changed)
 
     def _rebuild_deck_order(self) -> None:
-        """Выстраивает порядок элементов Command Deck (авто-инверсия при стыковке снизу)."""
+        """Выстраивает порядок Command Deck: ручка на свободной грани, авто-инверсия снизу."""
         inverted = should_invert_input_order(self.dock_position)
-        self._drag_strip.set_edge_at_bottom(inverted)
+        self._drag_strip.set_edge_at_bottom(not inverted)
+        self._toggle_drawer_btn.set_inverted(inverted)
 
-        widgets: tuple[QWidget, ...] = (
-            (
+        if inverted:
+            self._chip_bar_layout.setContentsMargins(14, 6, 14, 2)
+            self._input_row_layout.setContentsMargins(14, 4, 12, 10)
+            widgets: tuple[QWidget, ...] = (
+                self._drag_strip,
                 self._chat_drawer,
                 self._drawer_divider,
                 self._chip_bar_wrap,
                 self._input_row,
-                self._drag_strip,
             )
-            if inverted
-            else (
-                self._drag_strip,
+        else:
+            self._input_row_layout.setContentsMargins(14, 10, 12, 5)
+            self._chip_bar_layout.setContentsMargins(14, 0, 14, 6)
+            widgets = (
                 self._input_row,
                 self._chip_bar_wrap,
                 self._drawer_divider,
                 self._chat_drawer,
+                self._drag_strip,
             )
-        )
+
         for widget in widgets:
             self._deck_layout.removeWidget(widget)
         for widget in widgets:
@@ -751,7 +811,13 @@ class SpotlightBar(QWidget):
         self.update()
 
     def _apply_backdrop(self) -> None:
-        """Применяет нативный Windows 11 DWM Acrylic/Mica (безопасный no-op в offscreen)."""
+        """
+        Отключает системную прямоугольную подложку DWM (BackdropType.NONE).
+
+        Безрамочное окно с WA_TranslucentBackground и полями тени использует
+        собственное антиалиасное стекло Fluent 2 внутри QPainterPath, чтобы
+        Windows DWM никогда не рисовал серый прямоугольник поверх полей тени.
+        """
         if not self.isVisible():
             return
         try:
@@ -761,7 +827,7 @@ class SpotlightBar(QWidget):
         apply_win11_backdrop(
             hwnd,
             dark=self._theme_manager.is_dark,
-            backdrop=self._backdrop_type,
+            backdrop=BackdropType.NONE,
             disable_dwm_rounding=True,
         )
 
@@ -1150,9 +1216,122 @@ class SpotlightBar(QWidget):
         super().showEvent(event)
         self._apply_backdrop()
 
+    def _paint_drop_shadow(
+        self,
+        painter: QPainter,
+        rect: QRectF,
+        radii: tuple[int, int, int, int],
+        flat_edges: tuple[str, ...],
+        is_dark: bool,
+    ) -> None:
+        """Рисует мягкую многослойную тень Fluent 2 строго со свободных сторон."""
+        layers = (
+            ((10, 7), (7, 13), (5, 20), (3, 30), (1.5, 42))
+            if is_dark
+            else ((10, 4), (7, 7), (5, 11), (3, 16), (1.5, 22))
+        )
+        shadow_rgb = (0, 0, 0) if is_dark else (20, 24, 32)
+        y_bias = -1.5 if "bottom" in flat_edges else 2.0
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        for spread, alpha in layers:
+            dl = 0.0 if "left" in flat_edges else -spread
+            dt = 0.0 if "top" in flat_edges else -spread + min(0.0, y_bias)
+            dr = 0.0 if "right" in flat_edges else spread
+            db = 0.0 if "bottom" in flat_edges else spread + max(0.0, y_bias)
+            shadow_rect = rect.adjusted(dl, dt, dr, db)
+            exp = tuple(r + int(spread * 0.65) if r > 0 else 0 for r in radii)
+            path = _build_asymmetric_rounded_path(shadow_rect, (exp[0], exp[1], exp[2], exp[3]))
+            painter.setBrush(QColor(shadow_rgb[0], shadow_rgb[1], shadow_rgb[2], alpha))
+            painter.drawPath(path)
+
+    def _paint_fluent_glass(
+        self,
+        painter: QPainter,
+        rect: QRectF,
+        glass_path: QPainterPath,
+        is_dark: bool,
+    ) -> None:
+        """Рисует чистое полупрозрачное стекло Windows 11 строго внутри QPainterPath."""
+        painter.save()
+        painter.setClipPath(glass_path)
+
+        # Базовая тонированная стеклянная подложка с плавным вертикальным градиентом
+        base_grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+        if is_dark:
+            base_grad.setColorAt(0.0, QColor(34, 37, 46, 238))
+            base_grad.setColorAt(0.45, QColor(25, 28, 35, 244))
+            base_grad.setColorAt(1.0, QColor(21, 23, 29, 248))
+        else:
+            base_grad.setColorAt(0.0, QColor(252, 251, 248, 244))
+            base_grad.setColorAt(0.50, QColor(246, 245, 241, 246))
+            base_grad.setColorAt(1.0, QColor(239, 237, 231, 250))
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(base_grad)
+        painter.drawRect(rect)
+
+        # Верхний световой specular-блик матового стекла
+        sheen_h = min(72.0, rect.height() * 0.45)
+        sheen = QLinearGradient(rect.topLeft(), QPointF(rect.left(), rect.top() + sheen_h))
+        sheen.setColorAt(0.0, QColor(255, 255, 255, 18 if is_dark else 115))
+        sheen.setColorAt(0.5, QColor(255, 255, 255, 5 if is_dark else 35))
+        sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.setBrush(sheen)
+        painter.drawRect(QRectF(rect.left(), rect.top(), rect.width(), sheen_h))
+
+        # Деликатный тёплый отсвет Sponge Ochre со стороны эмблемы «Губка»
+        inverted = should_invert_input_order(self.dock_position)
+        glow_y = rect.bottom() - 28.0 if inverted else rect.top() + 28.0
+        warm = QRadialGradient(QPointF(rect.left() + 44.0, glow_y), 140.0)
+        ochre = QColor(self._theme_manager.tokens.sponge_ochre)
+        ochre_inner = QColor(ochre)
+        ochre_inner.setAlpha(18 if is_dark else 20)
+        ochre_outer = QColor(ochre)
+        ochre_outer.setAlpha(0)
+        warm.setColorAt(0.0, ochre_inner)
+        warm.setColorAt(1.0, ochre_outer)
+        painter.setBrush(warm)
+        painter.drawRect(rect)
+
+        painter.restore()
+
+    def _paint_specular_border(
+        self,
+        painter: QPainter,
+        rect: QRectF,
+        radii: tuple[int, int, int, int],
+        is_dark: bool,
+    ) -> None:
+        """Рисует чёткий 1px specular-ободок Fluent 2 по периметру стекла."""
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        # Внешний тонкий 1px контур с плавным переходом от верхнего блика
+        outer_path = _build_asymmetric_rounded_path(rect.adjusted(0.5, 0.5, -0.5, -0.5), radii)
+        rim_grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+        if is_dark:
+            rim_grad.setColorAt(0.0, QColor(255, 255, 255, 48))
+            rim_grad.setColorAt(0.35, QColor(255, 255, 255, 24))
+            rim_grad.setColorAt(1.0, QColor(255, 255, 255, 16))
+        else:
+            rim_grad.setColorAt(0.0, QColor(24, 28, 36, 26))
+            rim_grad.setColorAt(1.0, QColor(24, 28, 36, 36))
+        painter.setPen(QPen(rim_grad, 1.0))
+        painter.drawPath(outer_path)
+
+        # Деликатный внутренний световой край для эффекта глубины стекла
+        inner_radii = tuple(max(0, r - 1) if r > 0 else 0 for r in radii)
+        inner_path = _build_asymmetric_rounded_path(
+            rect.adjusted(1.5, 1.5, -1.5, -1.5),
+            (inner_radii[0], inner_radii[1], inner_radii[2], inner_radii[3]),
+        )
+        inner_color = QColor(255, 255, 255, 10) if is_dark else QColor(255, 255, 255, 155)
+        painter.setPen(QPen(inner_color, 1.0))
+        painter.drawPath(inner_path)
+
     @override
     def paintEvent(self, event: QPaintEvent) -> None:
-        """Рисует мягкую многослойную тень и 1px specular-ободок с учётом плоских кромок."""
+        """Рисует тень, антиалиасное стекло Fluent 2 и 1px specular-ободок."""
         rect = self._container.geometry()
         if not rect.isValid():
             return
@@ -1160,34 +1339,15 @@ class SpotlightBar(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
+        rect_f = QRectF(rect)
         radii = compute_corner_radii(self.dock_position, 18)
+        flat_edges = compute_flat_edges(self.dock_position)
         is_dark = self._theme_manager.is_dark
-        layers = (
-            ((8, 3, 14), (5, 2, 22), (2, 1, 34)) if is_dark else ((8, 3, 7), (5, 2, 11), (2, 1, 17))
-        )
-        shadow_rgb = (0, 0, 0) if is_dark else (24, 28, 36)
+        glass_path = _build_asymmetric_rounded_path(rect_f, radii)
 
-        painter.setPen(Qt.PenStyle.NoPen)
-        for spread, y_shift, alpha in layers:
-            shadow_rect = QRectF(
-                rect.adjusted(-spread, -spread + y_shift, spread, spread + y_shift)
-            )
-            expanded_radii = tuple(r + int(spread * 0.5) if r > 0 else 0 for r in radii)
-            path = _build_asymmetric_rounded_path(
-                shadow_rect,
-                (expanded_radii[0], expanded_radii[1], expanded_radii[2], expanded_radii[3]),
-            )
-            painter.setBrush(QColor(shadow_rgb[0], shadow_rgb[1], shadow_rgb[2], alpha))
-            painter.drawPath(path)
-
-        # Тонкий 1px Fluent 2 specular-ободок по периметру контейнера
-        border_path = _build_asymmetric_rounded_path(
-            QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), radii
-        )
-        specular = QColor(255, 255, 255, 26) if is_dark else QColor(255, 255, 255, 180)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(specular, 1.0))
-        painter.drawPath(border_path)
+        self._paint_drop_shadow(painter, rect_f, radii, flat_edges, is_dark)
+        self._paint_fluent_glass(painter, rect_f, glass_path, is_dark)
+        self._paint_specular_border(painter, rect_f, radii, is_dark)
         painter.end()
 
     @override

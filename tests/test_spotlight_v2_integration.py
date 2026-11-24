@@ -12,6 +12,7 @@ import os
 import sys
 from collections.abc import Generator
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
@@ -23,7 +24,7 @@ from PySide6.QtWidgets import QApplication, QComboBox
 from core.bootstrap import DependencyManager
 from core.voice.voice_pipeline import PipelineState
 from gui.agent_widgets import StepCard, StepEngine, StepStatus
-from gui.chat_drawer import ChatDrawer
+from gui.chat_drawer import ChatDrawer, render_markdown_to_html
 from gui.dock_manager import (
     DisplayMode,
     DockManager,
@@ -112,18 +113,22 @@ class TestSpotlightDockingAndMultiMonitor:
         assert (margins.right() == 0) == ("right" in edges)
         assert (margins.bottom() == 0) == ("bottom" in edges)
 
-        # Проверяем порядок строки ввода и ChatDrawer (авто-инверсия для BOTTOM/BL/BR)
+        # Проверяем порядок элементов: ручка захвата на свободной грани + авто-инверсия снизу
         first_item = docked_bar._deck_layout.itemAt(0)
         last_item = docked_bar._deck_layout.itemAt(docked_bar._deck_layout.count() - 1)
         assert first_item is not None and last_item is not None
         first_widget = first_item.widget()
         last_widget = last_item.widget()
+        drawer_idx = docked_bar._deck_layout.indexOf(docked_bar.chat_drawer)
+        input_idx = docked_bar._deck_layout.indexOf(docked_bar._input_row)
         if should_invert_input_order(position):
-            assert first_widget is docked_bar.chat_drawer
-            assert last_widget is docked_bar._drag_strip
-        else:
             assert first_widget is docked_bar._drag_strip
-            assert last_widget is docked_bar.chat_drawer
+            assert last_widget is docked_bar._input_row
+            assert drawer_idx < input_idx
+        else:
+            assert first_widget is docked_bar._input_row
+            assert last_widget is docked_bar._drag_strip
+            assert input_idx < drawer_idx
 
         if position != DockPosition.TOP:
             assert position.value in emitted
@@ -213,6 +218,21 @@ class TestThemeAgentMiniBarAndChips:
             img.fill(Qt.GlobalColor.transparent)
             docked_bar.render(img)
             assert not img.isNull()
+
+    def test_spotlight_apply_backdrop_uses_dwm_none_and_keeps_property(
+        self,
+        docked_bar: SpotlightBar,
+    ) -> None:
+        """_apply_backdrop всегда передаёт BackdropType.NONE в DWM, сохраняя API backdrop_type."""
+        docked_bar.show()
+        with patch("gui.spotlight_bar.apply_win11_backdrop") as mock_dwm:
+            docked_bar.set_backdrop_type(BackdropType.ACRYLIC)
+            assert docked_bar.backdrop_type == BackdropType.ACRYLIC
+            mock_dwm.assert_called()
+            _, kwargs = mock_dwm.call_args
+            assert kwargs["backdrop"] == BackdropType.NONE
+            assert kwargs["disable_dwm_rounding"] is True
+            assert kwargs["dark"] is True
 
     def test_agent_mini_bar_toggle_and_abort_requested(
         self,
@@ -328,6 +348,41 @@ class TestChatDrawerStepCardsAndThemes:
             drawer.clear()
             assert drawer.get_messages_count() == 0
             assert drawer.get_step_cards_count() == 0
+        finally:
+            drawer.deleteLater()
+
+    def test_chat_drawer_markdown_rendering_and_plain_get_text(
+        self,
+        qapp: QApplication,
+    ) -> None:
+        """Markdown безопасно рендерится в RichText, а MessageCard.get_text возвращает plain."""
+        raw_md = (
+            "```python\n"
+            "print('<script>alert(1)</script>')\n"
+            "```\n\n"
+            "**Инструкция:**\n"
+            "1. Сохраните в `open_app.py` и *проверьте* запуск.\n"
+            "- Поддержка списков."
+        )
+        html_dark = render_markdown_to_html(raw_md, DARK_TOKENS)
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html_dark
+        assert "<script>" not in html_dark
+        assert "<table" in html_dark
+        assert "<b" in html_dark and "Инструкция:" in html_dark
+        assert "<i>проверьте</i>" in html_dark
+        assert "open_app.py" in html_dark
+
+        html_light = render_markdown_to_html(raw_md, LIGHT_TOKENS)
+        assert LIGHT_TOKENS.text in html_light
+
+        drawer = ChatDrawer()
+        try:
+            card = drawer.add_message("assistant", raw_md, status="done")
+            assert card.get_text() == raw_md
+            assert card._text_label.textFormat() == Qt.TextFormat.RichText
+            assert "<table" in card._text_label.text()
+            # Нижний отступ контента QScrollArea >= 14px для защиты от обрезания
+            assert drawer._cards_layout.contentsMargins().bottom() >= 14
         finally:
             drawer.deleteLater()
 
