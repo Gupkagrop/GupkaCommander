@@ -50,11 +50,14 @@
   3. Обновлены флаги VLM и логирование: в `LlamaServerManager` и скрипты запуска добавлены `--image-min-tokens 1024 --jinja`, в `LocalLLMClient` увеличен `timeout_seconds` до `30.0`, в `core/paths.py` и `main.py` добавлено ротируемое логирование в `%LOCALAPPDATA%\GupkaCommander\logs\gupka.log` (безопасно при `sys.stderr is None`).
   4. Переработан интерфейс `SpotlightBar` и `ChatDrawer` (`gui/styles.py`, `gui/chat_drawer.py`, `gui/spotlight_bar.py`): стиль Windows 11 Fluent Dark Glass, векторные иконки `QPainter` без эмодзи, русскоязычные статусы (`Готов`, `Слушаю`, `Думаю...`, `Говорю`, `Без звука`), многослойная тень в `paintEvent`, перетаскивание окна мышью, кнопки микрофона и настроек с синхронизацией в `TrayManager`.
   5. Проведены визуальная проверка скриншотов и прогон сенсоров (`ruff check`/`format`, `mypy strict` в 81 файле, `597/597` pytest). Пересобран `dist/GupkaCommander/GupkaCommander.exe`.
+- [x] **2026-11-24 Чекпоинт 1 GupkaCommander 2.0 (Фаза 1 и Фаза 2 в `main`):**
+  1. **Фаза 1 (Мультимониторность и SoM):** Влито в `main` из `swarm-phase1-multimonitor-a6e70ce2` (`c422681`). Добавлены `MonitorManager`, Per-Monitor DPI v2, `SoMAnnotator`, обновления `ScreenCapture`, `VisionAgent`, `UIAutomationManager` и тесты `tests/test_multimonitor_som.py`.
+  2. **Фаза 2 (Память v2 и контекст LLM):** Влито в `main` из `swarm-phase2-memory-389e44b1` (`3279f99`). Добавлены эпизодическая память v2 с FTS5 (`core/memory/db.py`, `core/memory/memory_manager.py`), многоходовый контекст и `ThinkTagFilter` в `core/brain/llm_client.py`, а также тесты `tests/test_memory_v2_context.py`.
 
 ## 3. Active Task (Current Focus)
-- **Feature:** Устранение эха TTS, исправление выполнения AI-команд (YouTube / Блокнот / Заметки), внедрение файловых логов и редизайн Fluent Glass UI.
-- **Status:** 597/597 тестов зелёные (100%), 0 ошибок mypy в 81 файле, 0 ошибок ruff в 89 файлах; собран `dist/GupkaCommander/GupkaCommander.exe` (70.54 MB, пакет 898.50 MB).
-- **Verification Plan:** Завершение smoke-теста `.exe` и публикация релиза в `origin/main`.
+- **Feature:** Интеграция GupkaCommander 2.0 — Чекпоинт 1 (Фаза 1: Multi-Monitor + Per-Monitor DPI v2 + SoMAnnotator; Фаза 2: Memory v2 FTS5/episodes + Qwen3.5 multi-turn & ThinkTagFilter влиты в `main`).
+- **Status:** Фазы 1 и 2 объединены в `main` (без push); выполняется верификация и ожидание следующих этапов интеграции.
+- **Verification Plan:** Прогон `ruff check`, `mypy` и целевого набора `pytest` на `main` перед следующими слияниями.
 
 ## 4. Next Immediate Steps (Backlog)
 - [x] **Вектор 1:** Microsoft UI Automation (Tier 1 UIA) — мгновенный клик и ввод в окнах по именам элементов.
