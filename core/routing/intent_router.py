@@ -21,6 +21,14 @@ from rapidfuzz import fuzz, process
 logger = logging.getLogger(__name__)
 
 
+class ExecutionTier(StrEnum):
+    """Уровни выполнения запроса: диалог, детерминированный Fast-Path или ReAct-агент."""
+
+    CASUAL_CHAT = "casual_chat"
+    FAST_PATH = "fast_path"
+    AUTONOMOUS_AGENT = "autonomous_agent"
+
+
 class Intent(StrEnum):
     """Типы распознаваемых намерений пользователя."""
 
@@ -46,6 +54,7 @@ class RouteResult:
     params: dict[str, Any] = field(default_factory=dict)
     confidence: float = 1.0
     matched_rule: str = ""
+    tier: ExecutionTier = ExecutionTier.FAST_PATH
 
 
 class IntentRouter:
@@ -126,14 +135,82 @@ class IntentRouter:
             "настройки": "ms-settings:",
         }
 
+    _SEQUENTIAL_CONNECTOR_RE = re.compile(
+        r"\b(?:потом|затем|после\s+чего|а\s+потом|а\s+затем|а\s+дальше)\b"
+    )
+    _LEADING_ACTION_RE = re.compile(
+        r"^(?:открой|запусти|стартани|включи|перейди|найди|поищи|погугли|"
+        r"нажми|кликни|щелкни|введи|напечатай|создай|удали|скачай|установи|"
+        r"настрой|выбери|закрой|сверни|разверни|проверь|заполни|посмотри)\b"
+    )
+    _SUBSEQUENT_ACTION_RE = re.compile(
+        r"(?:,|;|\s+и)\s+(?:открой|запусти|включи|создай|выбери|напиши|нажми|"
+        r"кликни|щелкни|найди|поищи|введи|напечатай|закрой|сверни|разверни|"
+        r"перейди|скачай|сохрани|удали|проверь|заполни|сделай|отправь|"
+        r"переключи|поставь)\b"
+    )
+    _AUTONOMOUS_PHRASE_RE = re.compile(
+        r"(?:на\s+свой\s+вкус|создай\s+(?:новый\s+)?проект|напиши\s+прототип|"
+        r"выбери\s+модел[ьи]|заполни\s+форму|что-нибудь\s+прикольное|"
+        r"какое[-\s]нибудь\s+(?:прикольное\s+)?видео)"
+    )
+    _CASUAL_PREFIX_RE = re.compile(
+        r"^(?:что\s+такое|кто\s+такой|кто\s+такая|кто\s+президент|почему|зачем|"
+        r"объясни|расскажи(?:\s+про|\s+о|\s+мне)?|как\s+дела|поболтай|"
+        r"давай\s+поболтаем|какая\s+(?:сегодня|завтра)\s+погода|привет|"
+        r"здравствуй|добрый\s+(?:день|вечер|утро)|спасибо|благодарю)\b"
+    )
+    _OS_ACTION_VERB_RE = re.compile(
+        r"\b(?:открой|запусти|включи|поставь|нажми|кликни|щелкни|введи|"
+        r"перейди|скачай|установи|создай|удали|перемести|скопируй|закрой|"
+        r"сверни|разверни|настрой|выбери|заполни|проверь|посмотри|сделай)\b"
+    )
+    _OS_CONTEXT_RE = re.compile(
+        r"\b(?:ютуб\w*|youtube|видео|ролик\w*|фильм\w*|музык\w*|трек\w*|сайт\w*|"
+        r"браузер\w*|хром\w*|chrome|edge|экран\w*|окн\w*|папк\w*|файл\w*|"
+        r"проект\w*|прототип\w*|модел\w*|терминал\w*|консол\w*|антигравити|"
+        r"antigravity|vscode|приложен\w*|программ\w*|рабочем\s+столе|настройк\w*|"
+        r"вкладк\w*|кнопк\w*|форм\w*|репозитори\w*)\b"
+    )
+
+    def _is_compound_autonomous_task(self, lower_query: str) -> bool:
+        """Проверяет, является ли запрос составным многошаговым заданием."""
+        if lower_query.startswith(("запомни", "в окне", "внутри")):
+            return False
+        if self._CASUAL_PREFIX_RE.search(lower_query) and not self._SUBSEQUENT_ACTION_RE.search(
+            lower_query
+        ):
+            return False
+        if self._SEQUENTIAL_CONNECTOR_RE.search(lower_query):
+            return True
+        if self._AUTONOMOUS_PHRASE_RE.search(lower_query):
+            return True
+        if self._LEADING_ACTION_RE.search(lower_query) and self._SUBSEQUENT_ACTION_RE.search(
+            lower_query
+        ):
+            return True
+        return False
+
+    def _classify_cognitive_tier(self, lower_query: str) -> ExecutionTier:
+        """Разделяет AI_COGNITIVE на разговорный CASUAL_CHAT и AUTONOMOUS_AGENT."""
+        if not lower_query:
+            return ExecutionTier.CASUAL_CHAT
+        if self._is_compound_autonomous_task(lower_query):
+            return ExecutionTier.AUTONOMOUS_AGENT
+        if self._CASUAL_PREFIX_RE.search(lower_query):
+            return ExecutionTier.CASUAL_CHAT
+        if self._OS_ACTION_VERB_RE.search(lower_query) and self._OS_CONTEXT_RE.search(lower_query):
+            return ExecutionTier.AUTONOMOUS_AGENT
+        return ExecutionTier.CASUAL_CHAT
+
     def route(self, query: str) -> RouteResult:
-        """Определение намерения по входящей строке запроса.
+        """Определение намерения и уровня исполнения по входящей строке запроса.
 
         Args:
             query: Текст запроса от пользователя или распознанный голос.
 
         Returns:
-            RouteResult с определенным намерением, параметрами и уверенностью.
+            RouteResult с определенным намерением, уровнем tier, параметрами и уверенностью.
         """
         clean_query = query.strip()
         if not clean_query:
@@ -144,9 +221,21 @@ class IntentRouter:
                 params={},
                 confidence=1.0,
                 matched_rule="empty_query",
+                tier=ExecutionTier.CASUAL_CHAT,
             )
 
         lower_query = clean_query.lower()
+
+        if self._is_compound_autonomous_task(lower_query):
+            return RouteResult(
+                intent=Intent.AI_COGNITIVE,
+                query=clean_query,
+                target=clean_query,
+                params={"prompt": clean_query},
+                confidence=1.0,
+                matched_rule="compound_autonomous_task",
+                tier=ExecutionTier.AUTONOMOUS_AGENT,
+            )
 
         handlers = (
             self._match_volume_control,
@@ -166,6 +255,7 @@ class IntentRouter:
             if result is not None:
                 return result
 
+        tier = self._classify_cognitive_tier(lower_query)
         return RouteResult(
             intent=Intent.AI_COGNITIVE,
             query=clean_query,
@@ -173,6 +263,7 @@ class IntentRouter:
             params={"prompt": clean_query},
             confidence=1.0,
             matched_rule="fallback_ai_cognitive",
+            tier=tier,
         )
 
     def _match_volume_control(self, raw_query: str, lower_query: str) -> RouteResult | None:
