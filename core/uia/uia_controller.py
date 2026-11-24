@@ -16,8 +16,33 @@ import win32gui  # type: ignore[import-untyped]
 from rapidfuzz import fuzz
 
 from core.failsafe import FailSafeMonitor, get_failsafe_monitor, safe_execution
+from core.vision.monitor_manager import MonitorInfo
+from core.vision.screen_capture import screen_to_norm
 
 logger = logging.getLogger(__name__)
+
+# Типы интерактивных контролов UIA для фильтрации элементов разметки SoM
+INTERACTIVE_CONTROL_TYPE_IDS: frozenset[int] = frozenset(
+    {
+        50000,  # button
+        50001,  # calendar
+        50002,  # checkbox
+        50003,  # combobox
+        50004,  # edit
+        50005,  # hyperlink
+        50007,  # listitem
+        50011,  # menuitem
+        50013,  # radiobutton
+        50015,  # slider
+        50016,  # spinner
+        50019,  # tabitem
+        50024,  # treeitem
+        50025,  # custom (интерактивные элементы Electron/WebView)
+        50029,  # dataitem
+        50030,  # document
+        50031,  # splitbutton
+    }
+)
 
 # Сопоставление текстовых названий типов контролов с числовыми константами UIA ControlType
 CONTROL_TYPE_MAP: dict[str, int] = {
@@ -527,6 +552,50 @@ class UIAutomationManager:
 
             return False
 
+    @staticmethod
+    def _extract_rect_dict(rect_obj: Any) -> dict[str, int]:
+        """Преобразует UIA BoundingRectangle в словарь глобальных координат."""
+        if rect_obj is None:
+            return {"left": 0, "top": 0, "right": 0, "bottom": 0, "width": 0, "height": 0}
+        w_fn = getattr(rect_obj, "width", 0)
+        h_fn = getattr(rect_obj, "height", 0)
+        return {
+            "left": int(getattr(rect_obj, "left", 0)),
+            "top": int(getattr(rect_obj, "top", 0)),
+            "right": int(getattr(rect_obj, "right", 0)),
+            "bottom": int(getattr(rect_obj, "bottom", 0)),
+            "width": int(w_fn() if callable(w_fn) else w_fn),
+            "height": int(h_fn() if callable(h_fn) else h_fn),
+        }
+
+    def get_active_window_rect(self) -> dict[str, int] | None:
+        """Возвращает прямоугольник активного окна в глобальных координатах."""
+        with safe_execution(self.monitor) as safe:
+            safe.check()
+            try:
+                hwnd = int(win32gui.GetForegroundWindow())
+                if hwnd and win32gui.IsWindowVisible(hwnd):
+                    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                    if right > left and bottom > top and not (left <= -30000 and top <= -30000):
+                        return {
+                            "left": int(left),
+                            "top": int(top),
+                            "right": int(right),
+                            "bottom": int(bottom),
+                            "width": int(right - left),
+                            "height": int(bottom - top),
+                        }
+            except Exception as exc:
+                logger.debug("Не удалось получить rect через win32gui: %s", exc)
+
+            window = self._get_active_or_root_window()
+            if window is None:
+                return None
+            rect_dict = self._extract_rect_dict(getattr(window, "BoundingRectangle", None))
+            if rect_dict["width"] <= 0 or rect_dict["height"] <= 0:
+                return None
+            return rect_dict
+
     def _extract_element_info(self, ctrl: Any) -> dict[str, Any] | None:
         """Извлекает структурированную информацию об интерактивном элементе интерфейса."""
         try:
@@ -534,28 +603,7 @@ class UIAutomationManager:
             aid = str(getattr(ctrl, "AutomationId", "") or "").strip()
             c_type_id = int(getattr(ctrl, "ControlType", 0))
             c_type_name = str(getattr(ctrl, "ControlTypeName", "") or "")
-
-            rect_obj = getattr(ctrl, "BoundingRectangle", None)
-            if rect_obj is not None:
-                w_fn = getattr(rect_obj, "width", 0)
-                h_fn = getattr(rect_obj, "height", 0)
-                rect_dict = {
-                    "left": int(getattr(rect_obj, "left", 0)),
-                    "top": int(getattr(rect_obj, "top", 0)),
-                    "right": int(getattr(rect_obj, "right", 0)),
-                    "bottom": int(getattr(rect_obj, "bottom", 0)),
-                    "width": int(w_fn() if callable(w_fn) else w_fn),
-                    "height": int(h_fn() if callable(h_fn) else h_fn),
-                }
-            else:
-                rect_dict = {
-                    "left": 0,
-                    "top": 0,
-                    "right": 0,
-                    "bottom": 0,
-                    "width": 0,
-                    "height": 0,
-                }
+            rect_dict = self._extract_rect_dict(getattr(ctrl, "BoundingRectangle", None))
 
             val_id = getattr(self._auto.PatternId, "ValuePattern", 10002)
             val_p = self._get_pattern(ctrl, val_id)
@@ -580,19 +628,92 @@ class UIAutomationManager:
             logger.debug("Ошибка извлечения данных элемента: %s", exc)
             return None
 
+    @staticmethod
+    def _matches_inspection_filters(
+        info: dict[str, Any],
+        monitor: MonitorInfo | None,
+        interactive_only: bool,
+    ) -> bool:
+        """Проверяет видимость, интерактивность и принадлежность элемента монитору."""
+        if not (info["name"] or info["automation_id"]):
+            return False
+
+        rect = info["rect"]
+        if interactive_only:
+            if not info["is_enabled"] or info["is_offscreen"]:
+                return False
+            if rect["width"] <= 0 or rect["height"] <= 0:
+                return False
+            if int(info["control_type_id"]) not in INTERACTIVE_CONTROL_TYPE_IDS:
+                return False
+
+        if monitor is not None:
+            if rect["width"] <= 0 or rect["height"] <= 0 or info["is_offscreen"]:
+                return False
+            cx = (int(rect["left"]) + int(rect["right"])) // 2
+            cy = (int(rect["top"]) + int(rect["bottom"])) // 2
+            if not monitor.contains(cx, cy):
+                return False
+
+        return True
+
+    @staticmethod
+    def _attach_bounds_metadata(info: dict[str, Any], monitor: MonitorInfo | None) -> None:
+        """Добавляет глобальный центр и нормализованные [0..1000] границы для монитора."""
+        rect = info["rect"]
+        cx = (int(rect["left"]) + int(rect["right"])) // 2
+        cy = (int(rect["top"]) + int(rect["bottom"])) // 2
+        info["global_center"] = (cx, cy)
+
+        if monitor is None:
+            return
+
+        x1_n, y1_n = screen_to_norm(
+            int(rect["left"]),
+            int(rect["top"]),
+            monitor.width,
+            monitor.height,
+            left=monitor.left,
+            top=monitor.top,
+        )
+        x2_n, y2_n = screen_to_norm(
+            int(rect["right"]),
+            int(rect["bottom"]),
+            monitor.width,
+            monitor.height,
+            left=monitor.left,
+            top=monitor.top,
+        )
+        cx_n, cy_n = screen_to_norm(
+            cx,
+            cy,
+            monitor.width,
+            monitor.height,
+            left=monitor.left,
+            top=monitor.top,
+        )
+        info["norm_bbox"] = [x1_n, y1_n, x2_n, y2_n]
+        info["norm_center"] = (cx_n, cy_n)
+        info["monitor_index"] = monitor.index
+
     def inspect_window_elements(
         self,
         window_title: str | None = None,
-        max_depth: int = 3,
+        max_depth: int = 6,
+        monitor: MonitorInfo | None = None,
+        interactive_only: bool | None = None,
     ) -> list[dict[str, Any]]:
         """Инспекция и сбор списка интерактивных элементов в окне приложения.
 
         Args:
             window_title: Заголовок целевого окна. Если None, используется активное окно.
             max_depth: Максимальная глубина обхода иерархического дерева элементов.
+            monitor: Целевой монитор для фильтрации и нормализации координат [0..1000].
+            interactive_only: Фильтровать только видимые интерактивные контролы (по умолчанию
+                включено при передаче monitor).
 
         Returns:
-            Список словарей с описанием найденных элементов (имя, тип, координаты, состояние).
+            Список словарей с описанием найденных элементов и координатами.
         """
         with safe_execution(self.monitor) as safe:
             safe.check()
@@ -608,6 +729,9 @@ class UIAutomationManager:
             elements: list[dict[str, Any]] = []
             start_time = time.monotonic()
             effective_depth = max(1, max_depth)
+            filter_interactive = (
+                (monitor is not None) if interactive_only is None else interactive_only
+            )
 
             for child, _ in self._walk_control_safe(window, effective_depth):
                 safe.check()
@@ -616,7 +740,11 @@ class UIAutomationManager:
                     break
 
                 info = self._extract_element_info(child)
-                if info is not None and (info["name"] or info["automation_id"]):
-                    elements.append(info)
+                if info is None:
+                    continue
+                if not self._matches_inspection_filters(info, monitor, filter_interactive):
+                    continue
+                self._attach_bounds_metadata(info, monitor)
+                elements.append(info)
 
             return elements

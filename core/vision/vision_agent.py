@@ -18,7 +18,8 @@ from typing import Any
 import pyautogui  # type: ignore[import-untyped]
 
 from core.failsafe import FailSafeMonitor, get_failsafe_monitor, safe_execution
-from core.vision.screen_capture import ScreenCapture
+from core.vision.monitor_manager import MonitorInfo, MonitorManager
+from core.vision.screen_capture import ScreenCapture, ScreenFrame
 
 logger = logging.getLogger(__name__)
 
@@ -147,15 +148,69 @@ class VisionAgent:
         """Доступ к экземпляру захвата экрана."""
         return self._screen_capture
 
-    def norm_to_screen(self, x_norm: int, y_norm: int) -> tuple[int, int]:
-        """Преобразование нормализованных координат [0, 1000] в физические экранные координаты."""
-        width, height = self._screen_capture.get_screen_size()
-        return self._screen_capture.norm_to_screen(x_norm, y_norm, width, height)
+    def _has_real_monitor_manager(self) -> bool:
+        """Проверяет наличие настоящего MonitorManager у объекта захвата экрана."""
+        mgr = getattr(self._screen_capture, "monitor_manager", None)
+        return isinstance(mgr, MonitorManager)
 
-    def screen_to_norm(self, x_screen: int, y_screen: int) -> tuple[int, int]:
-        """Преобразование физических экранных координат в нормализованный диапазон [0, 1000]."""
-        width, height = self._screen_capture.get_screen_size()
-        return self._screen_capture.screen_to_norm(x_screen, y_screen, width, height)
+    def _get_monitor_geometry(
+        self, monitor_index: int | None = None
+    ) -> tuple[int, int, int, int, int]:
+        """Возвращает (monitor_index, left, top, width, height) для целевого монитора."""
+        if hasattr(self._screen_capture, "get_monitor_info"):
+            info = self._screen_capture.get_monitor_info(monitor_index)
+            if isinstance(info, MonitorInfo):
+                return (info.index, info.left, info.top, info.width, info.height)
+
+        idx = 1 if monitor_index is None else monitor_index
+        size = (
+            self._screen_capture.get_screen_size()
+            if monitor_index is None
+            else self._screen_capture.get_screen_size(monitor_index)
+        )
+        return (idx, 0, 0, int(size[0]), int(size[1]))
+
+    def _capture_frame_for_monitor(
+        self,
+        monitor_index: int | None = None,
+        include_base64: bool = False,
+    ) -> ScreenFrame:
+        """Захватывает кадр целевого монитора с сохранением совместимости моков."""
+        if monitor_index is not None:
+            return self._screen_capture.capture_frame(
+                monitor_index=monitor_index, include_base64=include_base64
+            )
+        if self._has_real_monitor_manager():
+            return self._screen_capture.capture_frame(
+                monitor_index=None, include_base64=include_base64
+            )
+        return self._screen_capture.capture_frame(include_base64=include_base64)
+
+    def norm_to_screen(
+        self,
+        x_norm: int,
+        y_norm: int,
+        monitor_index: int | None = None,
+    ) -> tuple[int, int]:
+        """Преобразование нормализованных [0, 1000] координат в глобальные экранные."""
+        _, left, top, width, height = self._get_monitor_geometry(monitor_index)
+        local_x, local_y = self._screen_capture.norm_to_screen(x_norm, y_norm, width, height)
+        return (local_x + left, local_y + top)
+
+    def screen_to_norm(
+        self,
+        x_screen: int,
+        y_screen: int,
+        monitor_index: int | None = None,
+    ) -> tuple[int, int]:
+        """Преобразование глобальных экранных координат в нормализованные [0, 1000]."""
+        if monitor_index is None and self._has_real_monitor_manager():
+            mgr = self._screen_capture.monitor_manager
+            mon = mgr.get_monitor_for_point(x_screen, y_screen)
+            return mgr.global_to_norm(x_screen, y_screen, mon)
+
+        _, left, top, width, height = self._get_monitor_geometry(monitor_index)
+        return self._screen_capture.screen_to_norm(x_screen - left, y_screen - top, width, height)
 
     def _copy_to_clipboard(self, text: str) -> bool:
         """Помещение текста в буфер обмена с безопасным откатом."""
@@ -175,11 +230,19 @@ class VisionAgent:
         duration: float | None = None,
         steps: int | None = None,
         normalized: bool = False,
+        monitor_index: int | None = None,
     ) -> None:
         """Плавное перемещение курсора мыши в целевые экранные или нормализованные координаты."""
         with safe_execution(self._monitor) as safe:
             safe.check()
-            target_x, target_y = self.norm_to_screen(x, y) if normalized else (x, y)
+            if normalized:
+                target_x, target_y = (
+                    self.norm_to_screen(x, y, monitor_index=monitor_index)
+                    if monitor_index is not None
+                    else self.norm_to_screen(x, y)
+                )
+            else:
+                target_x, target_y = (x, y)
             total_steps = steps if steps is not None else self._mouse_move_steps
             if not smooth or total_steps <= 1:
                 self._pyautogui.moveTo(target_x, target_y)
@@ -250,17 +313,46 @@ class VisionAgent:
         target_y: int,
         button: str,
         clicks: int,
+        monitor_index: int | None = None,
     ) -> tuple[str, str]:
         """Выполнение одного клика с получением хешей кадра до и после действия."""
-        before_frame = self._screen_capture.capture_frame()
+        before_frame = self._capture_frame_for_monitor(monitor_index)
         self.move_to(target_x, target_y)
         self._monitor.check_abort()
         self._pyautogui.click(target_x, target_y, button=button, clicks=clicks)
         if self._post_click_delay_s > 0:
             time.sleep(self._post_click_delay_s)
         self._monitor.check_abort()
-        after_frame = self._screen_capture.capture_frame()
+        after_frame = self._capture_frame_for_monitor(monitor_index)
         return (before_frame.dhash, after_frame.dhash)
+
+    def _resolve_click_target(
+        self,
+        x_norm: int,
+        y_norm: int,
+        normalized: bool,
+        monitor_index: int | None,
+    ) -> tuple[int, int, int | None]:
+        """Вычисляет глобальные координаты клика и целевой индекс монитора для dhash."""
+        has_mgr = self._has_real_monitor_manager()
+        if not normalized:
+            target_mon = (
+                self._screen_capture.monitor_manager.get_monitor_for_point(x_norm, y_norm).index
+                if monitor_index is None and has_mgr
+                else monitor_index
+            )
+            return (x_norm, y_norm, target_mon)
+
+        target_mon = (
+            self._screen_capture.monitor_manager.get_active_monitor().index
+            if monitor_index is None and has_mgr
+            else monitor_index
+        )
+        if target_mon is not None:
+            tx, ty = self.norm_to_screen(x_norm, y_norm, monitor_index=target_mon)
+        else:
+            tx, ty = self.norm_to_screen(x_norm, y_norm)
+        return (tx, ty, target_mon)
 
     def click_at(
         self,
@@ -271,29 +363,12 @@ class VisionAgent:
         verify_change: bool = True,
         max_attempts: int | None = None,
         normalized: bool = True,
+        monitor_index: int | None = None,
     ) -> bool:
-        """Клик по нормализованным или экранным координатам с контролем изменения экрана.
-
-        Args:
-            x_norm: Координата X ([0, 1000] или экранная в зависимости от normalized).
-            y_norm: Координата Y ([0, 1000] или экранная в зависимости от normalized).
-            button: Кнопка мыши ('left', 'right', 'middle').
-            clicks: Число нажатий (1 - одинарный, 2 - двойной).
-            verify_change: Проверять изменение экрана после клика через dhash.
-            max_attempts: Максимальное количество попыток при отсутствии реакции.
-            normalized: Интерпретировать ли переданные координаты как нормализованные [0, 1000].
-
-        Returns:
-            True при успешном выполнении клика.
-
-        Raises:
-            ActionFailedError: Если экран не изменился после исчерпания попыток.
-            InterruptedError: При аварийном прерывании (FailSafe).
-        """
-        if normalized:
-            target_x, target_y = self.norm_to_screen(x_norm, y_norm)
-        else:
-            target_x, target_y = (x_norm, y_norm)
+        """Клик по нормализованным или экранным координатам с контролем изменения монитора."""
+        target_x, target_y, target_mon = self._resolve_click_target(
+            x_norm, y_norm, normalized, monitor_index
+        )
 
         if not verify_change:
             with safe_execution(self._monitor):
@@ -305,7 +380,7 @@ class VisionAgent:
         for attempt in range(1, limit + 1):
             with safe_execution(self._monitor):
                 before_hash, after_hash = self._execute_click_step(
-                    target_x, target_y, button, clicks
+                    target_x, target_y, button, clicks, monitor_index=target_mon
                 )
                 if before_hash != after_hash:
                     logger.info(
@@ -359,17 +434,21 @@ class VisionAgent:
             safe.check()
             self._pyautogui.hotkey(*keys)
 
-    def inspect_screen(self) -> dict[str, Any]:
-        """Снимок и инспекция текущего состояния экрана для когнитивного ядра (VLM).
+    def inspect_screen(self, monitor_index: int | None = None) -> dict[str, Any]:
+        """Снимок и инспекция указанного или активного монитора для когнитивного ядра (VLM).
 
         Returns:
-            Словарь с геометрией экрана, разностным хешем и изображением в Base64.
+            Словарь с геометрией монитора, разностным хешем и изображением в Base64.
         """
         with safe_execution(self._monitor):
-            frame = self._screen_capture.capture_frame(include_base64=True)
+            frame = self._capture_frame_for_monitor(monitor_index, include_base64=True)
             return {
+                "monitor_index": frame.monitor_index,
+                "left": frame.left,
+                "top": frame.top,
                 "width": frame.width,
                 "height": frame.height,
+                "dpi_scale": frame.dpi_scale,
                 "dhash": frame.dhash,
                 "image_b64": frame.b64,
                 "base64_image": frame.b64,
