@@ -211,11 +211,12 @@ class ContextChipBar(QWidget):
         return self._buttons.get(chip_id)
 
     def _create_chip_button(self, chip: ContextChip) -> QPushButton:
-        """Создаёт и настраивает одну кликабельную кнопку-пилюлю."""
+        """Создаёт и настраивает одну компактную кнопку-пилюлю (22px)."""
         btn = QPushButton(chip.label, self)
         btn.setObjectName("contextChip")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setFlat(True)
+        btn.setFixedHeight(22)
         btn.setToolTip(chip.tooltip)
         btn.setProperty("active", chip.active)
         btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
@@ -231,21 +232,25 @@ class ContextChipBar(QWidget):
         self._buttons.clear()
 
     def _apply_button_styles(self) -> None:
-        """Применяет актуальные токены темы ко всем кнопкам-чипам."""
+        """Применяет спокойные минималистичные токены Fluent 2 ко всем микро-пилюлям."""
         t = self._tokens
+        idle_bg = "rgba(255, 255, 255, 0.04)" if t.is_dark else "rgba(24, 28, 36, 0.04)"
+        idle_border = "rgba(255, 255, 255, 0.07)" if t.is_dark else "rgba(24, 28, 36, 0.08)"
         for chip in self._chips:
             btn = self._buttons.get(chip.chip_id)
             if btn is None:
                 continue
             if chip.active:
                 bg, fg, border = t.sponge_ochre_soft, t.sponge_ochre, t.sponge_ochre_border
+                weight = 600
             else:
-                bg, fg, border = t.surface_chip, t.text_secondary, t.border_subtle
+                bg, fg, border = idle_bg, t.text_secondary, idle_border
+                weight = 500
             btn.setStyleSheet(
                 "QPushButton#contextChip {"
                 f"  background-color: {bg}; color: {fg};"
                 f"  border: 1px solid {border}; border-radius: 11px;"
-                "  padding: 3px 10px; font-size: 11px; font-weight: 600;"
+                f"  padding: 0px 9px; font-size: 10.5px; font-weight: {weight};"
                 "}"
                 "QPushButton#contextChip:hover {"
                 f"  background-color: {t.surface_chip_hover}; color: {t.text};"

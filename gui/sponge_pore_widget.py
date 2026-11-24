@@ -12,12 +12,14 @@ from dataclasses import dataclass
 from enum import Enum, StrEnum
 from typing import override
 
-from PySide6.QtCore import QEvent, QPointF, QSize, Qt, QTimer, Slot
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, Slot
 from PySide6.QtGui import (
     QColor,
     QEnterEvent,
     QHideEvent,
+    QLinearGradient,
     QPainter,
+    QPainterPath,
     QPaintEvent,
     QPen,
     QPixmap,
@@ -54,17 +56,15 @@ class _PoreSpec:
     diag_order: float
 
 
-# Органический кластер из 9 микропор (3x3 с естественным смещением и разбросом радиусов)
+# Органический кластер из 7 пор разного диаметра внутри скульптурного squircle-бейджа «Губка»
 _PORE_CLUSTER: tuple[_PoreSpec, ...] = (
-    _PoreSpec(-0.62, -0.58, 0.105, 0.00),
-    _PoreSpec(0.03, -0.66, 0.118, 0.22),
-    _PoreSpec(0.64, -0.54, 0.095, 0.44),
-    _PoreSpec(-0.66, 0.04, 0.116, 0.25),
-    _PoreSpec(0.00, 0.00, 0.148, 0.50),
-    _PoreSpec(0.65, 0.06, 0.110, 0.72),
-    _PoreSpec(-0.58, 0.63, 0.096, 0.54),
-    _PoreSpec(-0.02, 0.65, 0.115, 0.78),
-    _PoreSpec(0.60, 0.60, 0.104, 1.00),
+    _PoreSpec(-0.36, -0.34, 0.138, 0.05),  # Крупная верхне-левая пора
+    _PoreSpec(0.32, -0.38, 0.088, 0.25),  # Малая верхне-правая пора
+    _PoreSpec(-0.48, 0.14, 0.082, 0.36),  # Малая левая пора
+    _PoreSpec(0.06, -0.02, 0.118, 0.50),  # Центральная выразительная пора
+    _PoreSpec(0.48, 0.06, 0.098, 0.68),  # Средняя правая пора
+    _PoreSpec(-0.18, 0.46, 0.104, 0.80),  # Средняя нижне-левая пора
+    _PoreSpec(0.34, 0.44, 0.076, 0.96),  # Малая нижне-правая пора
 )
 
 # Позиции и радиусы точек в тайле 64x64 для тактильной полосы перетаскивания
@@ -312,31 +312,87 @@ class SpongePoreWidget(QWidget):
 
     @override
     def paintEvent(self, event: QPaintEvent) -> None:
-        """Отрисовывает микропористую матрицу с антиалиасингом и физикой состояния."""
+        """Отрисовывает скульптурный squircle-бейдж «Губка» с объёмными порами."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         side = float(min(self.width(), self.height()))
         cx = float(self.width()) / 2.0
         cy = float(self.height()) / 2.0
-        extent = max(6.0, (side / 2.0) - 3.5)
+        badge_side = max(14.0, side - 4.0)
+        badge_rect = QRectF(cx - badge_side / 2.0, cy - badge_side / 2.0, badge_side, badge_side)
+        extent = badge_side * 0.47
 
-        self._draw_backdrop_halo(painter, cx, cy, extent)
+        self._draw_backdrop_halo(painter, cx, cy, badge_side * 0.56)
+        self._draw_squircle_badge(painter, badge_rect)
         self._draw_pores(painter, cx, cy, extent)
-        self._draw_state_overlay(painter, cx, cy, extent)
+        self._draw_state_overlay(painter, badge_rect, cx, cy, extent)
         painter.end()
 
     def _state_color(self) -> QColor:
-        """Возвращает основной цветовой акцент для текущего состояния."""
+        """Возвращает основной фирменный цвет squircle-эмблемы для текущего состояния."""
         color_map: dict[PoreState, str] = {
-            PoreState.IDLE: self._tokens.pore_idle,
+            PoreState.IDLE: self._tokens.sponge_ochre,
             PoreState.LISTENING: self._tokens.accent,
             PoreState.PROCESSING: self._tokens.sponge_ochre,
             PoreState.SPEAKING: self._tokens.success,
-            PoreState.MUTED: self._tokens.danger,
+            PoreState.MUTED: self._tokens.pore_idle,
             PoreState.ERROR: self._tokens.danger,
         }
         return QColor(color_map[self._state])
+
+    def _draw_squircle_badge(self, painter: QPainter, rect: QRectF) -> None:
+        """Рисует объёмный скруглённый squircle-бейдж с градиентом и specular-бликом."""
+        base = self._state_color()
+        radius = rect.width() * 0.30
+
+        path = QPainterPath()
+        path.addRoundedRect(rect, radius, radius)
+
+        # Объёмный внутренний градиент (верхний левый блик -> тёплая глубина внизу)
+        top_color = base.lighter(118 if self._tokens.is_dark else 112)
+        mid_color = QColor(base)
+        bot_color = base.darker(126 if self._tokens.is_dark else 116)
+
+        if self._state == PoreState.MUTED:
+            top_color.setAlpha(155)
+            mid_color.setAlpha(140)
+            bot_color.setAlpha(135)
+        elif self._hovered and self._state == PoreState.IDLE:
+            top_color = base.lighter(126)
+
+        grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
+        grad.setColorAt(0.0, top_color)
+        grad.setColorAt(0.55, mid_color)
+        grad.setColorAt(1.0, bot_color)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(grad)
+        painter.drawPath(path)
+
+        # Мягкий внутренний световой блик в верхней трети для скульптурного объёма
+        painter.save()
+        painter.setClipPath(path)
+        sheen = QRadialGradient(
+            QPointF(rect.left() + rect.width() * 0.28, rect.top() + rect.height() * 0.18),
+            rect.width() * 0.72,
+        )
+        sheen.setColorAt(0.0, QColor(255, 255, 255, 78 if self._tokens.is_dark else 96))
+        sheen.setColorAt(0.55, QColor(255, 255, 255, 16))
+        sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.setBrush(sheen)
+        painter.drawRect(rect)
+        painter.restore()
+
+        # Тонкий 1px specular-ободок по периметру squircle
+        rim = QLinearGradient(rect.topLeft(), rect.bottomRight())
+        rim.setColorAt(0.0, QColor(255, 255, 255, 115 if self._tokens.is_dark else 150))
+        rim.setColorAt(0.6, QColor(255, 255, 255, 24))
+        rim.setColorAt(1.0, QColor(0, 0, 0, 50))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(rim, 1.0))
+        inset = rect.adjusted(0.5, 0.5, -0.5, -0.5)
+        painter.drawRoundedRect(inset, max(2.0, radius - 0.5), max(2.0, radius - 0.5))
 
     def _draw_backdrop_halo(
         self,
@@ -346,17 +402,21 @@ class SpongePoreWidget(QWidget):
         extent: float,
     ) -> None:
         """Рисует мягкое радиальное свечение под активными состояниями."""
-        if self._state in (PoreState.IDLE, PoreState.MUTED):
+        if self._state == PoreState.MUTED:
+            return
+        if self._state == PoreState.IDLE and not self._hovered:
             return
 
         halo_color = self._state_color()
-        intensity = 0.24
-        if self._state == PoreState.LISTENING:
-            intensity = 0.18 + 0.22 * self._audio_level
-        elif self._state == PoreState.SPEAKING:
-            intensity = 0.18 + 0.14 * ((math.sin(self._phase * 1.6) + 1.0) / 2.0)
+        intensity = 0.22
+        if self._state == PoreState.IDLE:
+            intensity = 0.16 + 0.06 * ((math.sin(self._phase) + 1.0) / 2.0)
+        elif self._state == PoreState.LISTENING:
+            intensity = 0.22 + 0.24 * self._audio_level
+        elif self._state in (PoreState.PROCESSING, PoreState.SPEAKING):
+            intensity = 0.20 + 0.14 * ((math.sin(self._phase * 1.6) + 1.0) / 2.0)
 
-        gradient = QRadialGradient(QPointF(cx, cy), extent * 1.15)
+        gradient = QRadialGradient(QPointF(cx, cy), extent * 1.18)
         inner = QColor(halo_color)
         inner.setAlpha(int(255 * intensity))
         outer = QColor(halo_color)
@@ -366,35 +426,33 @@ class SpongePoreWidget(QWidget):
 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(gradient)
-        painter.drawEllipse(QPointF(cx, cy), extent * 1.12, extent * 1.12)
+        painter.drawEllipse(QPointF(cx, cy), extent * 1.16, extent * 1.16)
 
     def _pore_transform(self, spec: _PoreSpec) -> tuple[float, float, float, float]:
-        """Вычисляет смещённые (nx, ny), масштаб радиуса и яркость (0..1) одной поры."""
+        """Вычисляет смещённые (nx, ny), масштаб радиуса и глубину (0..1) одной поры."""
         if self._state == PoreState.IDLE:
-            breath = 0.08 * math.sin(self._phase + spec.diag_order * 2.0) if self._hovered else 0.0
-            return (spec.nx, spec.ny, 1.0 + breath, 0.72 if self._hovered else 0.62)
+            breath = 0.09 * math.sin(self._phase + spec.diag_order * 2.2) if self._hovered else 0.0
+            return (spec.nx, spec.ny, 1.0 + breath, 0.84 if self._hovered else 0.78)
 
         if self._state == PoreState.LISTENING:
-            pull = 0.22 * self._audio_level + 0.06 * ((math.sin(self._phase * 2.0) + 1.0) / 2.0)
-            scale = 0.85 + 0.35 * self._audio_level
-            if spec.nx == 0.0 and spec.ny == 0.0:
-                scale = 1.05 + 0.30 * self._audio_level
+            pull = 0.20 * self._audio_level + 0.06 * ((math.sin(self._phase * 2.0) + 1.0) / 2.0)
+            scale = 0.88 + 0.34 * self._audio_level
             return (spec.nx * (1.0 - pull), spec.ny * (1.0 - pull), scale, 0.92)
 
         if self._state == PoreState.PROCESSING:
             wave = (math.sin(self._phase * 1.8 - spec.diag_order * math.pi * 1.6) + 1.0) / 2.0
-            return (spec.nx, spec.ny, 0.76 + 0.44 * wave, 0.48 + 0.52 * wave)
+            return (spec.nx, spec.ny, 0.78 + 0.38 * wave, 0.56 + 0.44 * wave)
 
         if self._state == PoreState.SPEAKING:
             dist = math.hypot(spec.nx, spec.ny)
             pulse = (math.sin(self._phase * 2.0 - dist * 3.0) + 1.0) / 2.0
-            push = 1.0 + 0.09 * pulse
-            return (spec.nx * push, spec.ny * push, 0.82 + 0.36 * pulse, 0.58 + 0.42 * pulse)
+            push = 1.0 + 0.08 * pulse
+            return (spec.nx * push, spec.ny * push, 0.84 + 0.32 * pulse, 0.65 + 0.35 * pulse)
 
         if self._state == PoreState.MUTED:
-            return (spec.nx, spec.ny, 0.88, 0.55)
+            return (spec.nx, spec.ny, 0.86, 0.50)
 
-        return (spec.nx, spec.ny, 1.02, 0.95)
+        return (spec.nx, spec.ny, 1.02, 0.90)
 
     def _draw_pores(
         self,
@@ -403,40 +461,51 @@ class SpongePoreWidget(QWidget):
         cy: float,
         extent: float,
     ) -> None:
-        """Отрисовывает все 9 микропор матрицы с учётом текущей физики состояния."""
+        """Отрисовывает органичные объёмные поры с внутренней тенью и нижним бликом."""
         base_color = self._state_color()
+        cavity_base = base_color.darker(235 if self._tokens.is_dark else 210)
+        rim_base = base_color.lighter(145)
         painter.setPen(Qt.PenStyle.NoPen)
 
         for spec in _PORE_CLUSTER:
-            nx, ny, radius_scale, opacity = self._pore_transform(spec)
+            nx, ny, radius_scale, depth = self._pore_transform(spec)
             px = cx + nx * extent
             py = cy + ny * extent
-            radius = max(1.1, spec.radius_ratio * extent * 1.65 * radius_scale)
+            radius = max(1.1, spec.radius_ratio * extent * 1.52 * radius_scale)
 
-            pore_color = QColor(base_color)
-            pore_color.setAlpha(int(255 * max(0.15, min(1.0, opacity))))
-            painter.setBrush(pore_color)
+            # Тонкий нижне-правый рефлекс кромки поры (эффект вдавленного углубления)
+            rim_color = QColor(rim_base)
+            rim_color.setAlpha(int(120 * max(0.2, min(1.0, depth))))
+            painter.setBrush(rim_color)
+            painter.drawEllipse(QPointF(px + 0.35, py + 0.45), radius, radius)
+
+            # Основная глубина поры
+            cavity = QColor(cavity_base)
+            cavity.setAlpha(int(195 * max(0.25, min(1.0, depth))))
+            painter.setBrush(cavity)
             painter.drawEllipse(QPointF(px, py), radius, radius)
 
     def _draw_state_overlay(
         self,
         painter: QPainter,
+        badge_rect: QRectF,
         cx: float,
         cy: float,
         extent: float,
     ) -> None:
-        """Рисует вспомогательный штрих для MUTED или тонкий ободок тревоги для ERROR."""
+        """Рисует диагональный штрих для MUTED или тонкий ободок тревоги для ERROR."""
         if self._state == PoreState.MUTED:
-            pen = QPen(self._state_color(), 1.8)
+            pen = QPen(QColor(self._tokens.danger), 2.0)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(pen)
-            delta = extent * 0.82
+            delta = extent * 0.92
             painter.drawLine(QPointF(cx - delta, cy - delta), QPointF(cx + delta, cy + delta))
             return
 
         if self._state == PoreState.ERROR:
-            ring_color = self._state_color()
-            ring_color.setAlpha(155)
-            painter.setPen(QPen(ring_color, 1.3))
+            ring_color = QColor(self._tokens.danger)
+            ring_color.setAlpha(185)
+            painter.setPen(QPen(ring_color, 1.5))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawEllipse(QPointF(cx, cy), extent * 0.98, extent * 0.98)
+            r = badge_rect.width() * 0.32
+            painter.drawRoundedRect(badge_rect.adjusted(-1.0, -1.0, 1.0, 1.0), r, r)
