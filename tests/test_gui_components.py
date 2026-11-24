@@ -567,12 +567,13 @@ class TestMainApplicationWiringHeadless:
             assert "Калькулятор" in resp_app
             mock_launch.assert_called_once_with(fake_app.path)
 
-        # 5. Резервный поиск в поисковой системе
+        # 5. Безопасный ответ в CASUAL_CHAT при оффлайн LLM (без ложного поиска в сети)
         mock_os.reset_mock()
         mock_finder.find.return_value = []
-        resp_fallback = app_ctrl.execute_command("неизвестная абракадабра")
-        mock_os.search.assert_called_once_with("неизвестная абракадабра")
-        assert "абракадабра" in resp_fallback
+        with patch.object(app_ctrl.llm_client, "is_healthy", return_value=False):
+            resp_fallback = app_ctrl.execute_command("неизвестная абракадабра")
+        mock_os.search.assert_not_called()
+        assert "Qwen3.5" in resp_fallback
 
         app_ctrl.shutdown()
         mock_bar.deleteLater()

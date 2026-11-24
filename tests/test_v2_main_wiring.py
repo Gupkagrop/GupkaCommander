@@ -699,3 +699,97 @@ def test_cli_remove_dependencies_yes_and_installer_iss(
     ]
     assert len(delete_entries) == 2
     assert all("config" not in line and "memory.db" not in line for line in delete_entries)
+
+
+def test_ensure_react_engine_wires_screen_capture(qapp: QApplication, tmp_path: Path) -> None:
+    """_ensure_react_engine() пробрасывает ScreenCapture в StepVerifier и ReActEngine."""
+    from core.vision.screen_capture import ScreenCapture
+    from core.vision.vision_agent import VisionAgent
+
+    real_sc = ScreenCapture()
+    vision = VisionAgent(screen_capture=real_sc)
+    app = GupkaCommanderApp(
+        app=qapp,
+        app_finder=MagicMock(spec=AppFinder),
+        os_controller=MagicMock(spec=OSController),
+        voice_pipeline=MagicMock(spec=VoicePipeline),
+        spotlight_bar=SpotlightBar(hide_on_focus_loss=False),
+        tray_manager=TrayManager(),
+        hotkey_manager=HotkeyManager(),
+        llm_client=MagicMock(spec=LocalLLMClient),
+        vision_agent=vision,
+        failsafe_monitor=MagicMock(spec=FailSafeMonitor),
+        memory_manager=MemoryManager(db_path=tmp_path / "sc_wiring.db"),
+        enable_voice=False,
+        enable_hotkey=False,
+        enable_tray=False,
+    )
+    try:
+        assert app.react_engine is not None
+        assert app.step_verifier is not None
+        assert app.react_engine.screen_capture is real_sc
+        assert app.step_verifier._screen_capture is real_sc
+    finally:
+        app.shutdown()
+
+    # Также проверяем случай VisionAgent-подкласса/мока без реального ScreenCapture-атрибута
+    class _VisionNoSc(VisionAgent):
+        def __init__(self) -> None:
+            self._screen_capture = None  # type: ignore[assignment]
+
+    app_fallback_sc = GupkaCommanderApp(
+        app=qapp,
+        app_finder=MagicMock(spec=AppFinder),
+        os_controller=MagicMock(spec=OSController),
+        voice_pipeline=MagicMock(spec=VoicePipeline),
+        spotlight_bar=SpotlightBar(hide_on_focus_loss=False),
+        tray_manager=TrayManager(),
+        hotkey_manager=HotkeyManager(),
+        llm_client=MagicMock(spec=LocalLLMClient),
+        vision_agent=_VisionNoSc(),
+        failsafe_monitor=MagicMock(spec=FailSafeMonitor),
+        memory_manager=MemoryManager(db_path=tmp_path / "sc_fallback.db"),
+        enable_voice=False,
+        enable_hotkey=False,
+        enable_tray=False,
+    )
+    try:
+        assert app_fallback_sc.react_engine is not None
+        assert app_fallback_sc.step_verifier is not None
+        assert isinstance(app_fallback_sc.react_engine.screen_capture, ScreenCapture)
+        assert (
+            app_fallback_sc.step_verifier._screen_capture
+            is app_fallback_sc.react_engine.screen_capture
+        )
+    finally:
+        app_fallback_sc.shutdown()
+
+
+def test_offline_casual_chat_never_triggers_web_search(qapp: QApplication, tmp_path: Path) -> None:
+    """При оффлайн LLM запросы CASUAL_CHAT не вызывают os_controller.search."""
+    mock_llm = MagicMock(spec=LocalLLMClient)
+    mock_llm.is_healthy.return_value = False
+    mock_llm.fallback_engine = None
+
+    app, mock_os, _, _, _ = _build_app(qapp, tmp_path, llm_client=mock_llm)
+    try:
+        reply_weather = app.execute_command("Какая сегодня погода?")
+        assert "Qwen3.5" in reply_weather
+        assert "Модели и зависимости" in reply_weather
+        mock_os.search.assert_not_called()
+
+        # Шаблон поиска или статус недоступности тоже заменяется безопасным текстом
+        fake_fb = MagicMock()
+        fake_fb.respond.return_value = "Команда не найдена локально. Выполняю поиск в сети: тест"
+        mock_llm.fallback_engine = fake_fb
+        reply_stub = app.execute_command("Что ты умеешь делать?")
+        assert "Qwen3.5" in reply_stub
+        mock_os.search.assert_not_called()
+
+        # Разговорный ответ fallback_engine (например, приветствие) возвращается напрямую
+        fake_fb.respond.return_value = "Привет! Я локальный оператор GupkaCommander. Чем помочь?"
+        reply_hi = app.execute_command("Привет, как дела?")
+        assert reply_hi == "Привет! Я локальный оператор GupkaCommander. Чем помочь?"
+        mock_os.search.assert_not_called()
+    finally:
+        app.shutdown()

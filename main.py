@@ -41,6 +41,7 @@ from core.os_controller import DangerousCommandError, OSController
 from core.paths import get_config_path, get_database_path, get_icon_path, get_logs_dir
 from core.routing.intent_router import ExecutionTier, Intent, IntentRouter, RouteResult
 from core.uia import UIAutomationManager
+from core.vision.screen_capture import ScreenCapture
 from core.vision.som_annotator import SoMAnnotator
 from core.vision.vision_agent import ActionFailedError, VisionAgent
 from core.voice.sentence_streamer import SentenceAccumulator
@@ -262,6 +263,15 @@ class GupkaCommanderApp(QObject):
         if self.react_engine is not None:
             return self.react_engine
         try:
+            raw_screen_capture = getattr(self.vision_agent, "screen_capture", None)
+            screen_capture: ScreenCapture | None
+            if isinstance(raw_screen_capture, ScreenCapture):
+                screen_capture = raw_screen_capture
+            elif isinstance(self.vision_agent, VisionAgent):
+                screen_capture = ScreenCapture()
+            else:
+                screen_capture = raw_screen_capture
+
             if self.tool_registry is None:
                 self.tool_registry = ToolRegistry(
                     os_controller=self.os_controller,
@@ -275,6 +285,7 @@ class GupkaCommanderApp(QObject):
                 )
             if self.step_verifier is None:
                 self.step_verifier = StepVerifier(
+                    screen_capture=screen_capture,
                     uia_manager=self.uia_manager,
                     browser_bridge=self.browser_bridge,
                     som_annotator=self.som_annotator,
@@ -287,6 +298,7 @@ class GupkaCommanderApp(QObject):
                 memory_manager=self.memory_manager,
                 browser_bridge=self.browser_bridge,
                 uia_manager=self.uia_manager,
+                screen_capture=screen_capture,
                 som_annotator=self.som_annotator,
                 failsafe_monitor=self.failsafe_monitor,
             )
@@ -788,10 +800,33 @@ class GupkaCommanderApp(QObject):
             return self._handle_autonomous_agent(text)
         return None
 
+    def _offline_casual_chat_reply(self, text: str) -> str:
+        """Безопасный ответ для CASUAL_CHAT при оффлайн LLM без запуска поиска в браузере."""
+        fallback_engine = getattr(self.llm_client, "fallback_engine", None)
+        if fallback_engine is not None and hasattr(fallback_engine, "respond"):
+            try:
+                reply = fallback_engine.respond(text)
+            except Exception as exc:
+                logger.debug("Ошибка fallback_engine.respond в CASUAL_CHAT: %s", exc)
+                reply = None
+            if isinstance(reply, str):
+                clean_reply = reply.strip()
+                disallowed_prefixes = (
+                    "Команда не найдена",
+                    "Выполняю поиск",
+                    "Локальный ИИ-сервер недоступен",
+                )
+                if clean_reply and not clean_reply.startswith(disallowed_prefixes):
+                    return self._stream_cognitive_response(text)
+        return (
+            "Локальная модель Qwen3.5 ещё запускается или не установлена. "
+            "Подожди пару секунд или проверь «Модели и зависимости»."
+        )
+
     def _handle_casual_chat(self, text: str) -> str:
         """Чистый диалог с многоходовой историей без планирования инструментов."""
         if not self.llm_client.is_healthy():
-            return self._handle_ai_cognitive(text)
+            return self._offline_casual_chat_reply(text)
         raw_history = self.memory_manager.build_chat_messages(limit=8)
         history: list[dict[str, str]] | None = None
         if isinstance(raw_history, list):
