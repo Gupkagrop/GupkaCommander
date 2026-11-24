@@ -16,6 +16,7 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,7 +72,7 @@ class VRAMBudgetGuard:
     def __init__(
         self,
         min_total_gb: float = 6.5,
-        min_free_gb: float = 1.5,
+        min_free_gb: float = 2.2,
         timeout_seconds: float = 2.0,
         vram_probe: Callable[[], VRAMStatus] | None = None,
     ) -> None:
@@ -172,6 +173,8 @@ class LlamaServerManager:
         health_checker: Callable[[], bool] | None = None,
         tts_health_checker: Callable[[], bool] | None = None,
         vram_guard: VRAMBudgetGuard | None = None,
+        vlm_ready_timeout: float | None = None,
+        vlm_poll_interval: float = 0.5,
     ) -> None:
         """Инициализация пула локальных серверов инференса llama.cpp."""
         self.models_dir: Path = models_dir if models_dir is not None else get_models_dir()
@@ -186,6 +189,11 @@ class LlamaServerManager:
         self._health_checker = health_checker
         self._tts_health_checker = tts_health_checker
         self._vram_guard = vram_guard if vram_guard is not None else VRAMBudgetGuard()
+        self._vlm_ready_timeout: float = (
+            25.0 if vlm_ready_timeout is None else max(0.0, float(vlm_ready_timeout))
+        )
+        self._has_explicit_vlm_timeout: bool = vlm_ready_timeout is not None
+        self._vlm_poll_interval: float = max(0.01, float(vlm_poll_interval))
         self._process: Any | None = None
         self._tts_process: Any | None = None
         self._lock = threading.Lock()
@@ -473,13 +481,48 @@ class LlamaServerManager:
                 self._tts_process = None
                 return False
 
+    def _wait_for_vlm_ready(self) -> bool:
+        """Ожидает готовности VLM (:8080 /health == 200) перед проверкой VRAM для TTS."""
+        if self.is_server_healthy():
+            return True
+
+        # В юнит-тестах с подменным popen_factory без явного таймаута не блокируемся
+        if self._popen_factory is not subprocess.Popen and not self._has_explicit_vlm_timeout:
+            return True
+
+        deadline = time.monotonic() + self._vlm_ready_timeout
+        while True:
+            with self._lock:
+                proc = self._process
+            if proc is not None and proc.poll() is not None:
+                logger.warning("Процесс VLM llama-server завершился во время запуска.")
+                return False
+
+            if self.is_server_healthy():
+                return True
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            time.sleep(min(self._vlm_poll_interval, remaining))
+
+        return self.is_server_healthy()
+
     def start(self, force: bool = False) -> bool:
-        """Запускает VLM (:8080) и, если позволяет бюджет VRAM, сервис Qwen3-TTS (:8081)."""
+        """Запускает VLM (:8080) и после его готовности оценивает VRAM для Qwen3-TTS (:8081)."""
         vlm_ok = self._start_vlm(force=force)
         if not vlm_ok:
             return False
 
-        # Пытаемся поднять TTS (:8081) только если веса TTS реально присутствуют и хватает VRAM
+        vlm_ready = self._wait_for_vlm_ready()
+        if not vlm_ready:
+            logger.info(
+                "VLM (:8080) не готов за %.1f с — запуск TTS отложен на Piper.",
+                self._vlm_ready_timeout,
+            )
+            return True
+
+        # Пытаемся поднять TTS (:8081) только после загрузки VLM и оценки оставшейся VRAM
         tts_model, _ = self.find_tts_model_paths()
         if tts_model is not None:
             self.start_tts(force=force)

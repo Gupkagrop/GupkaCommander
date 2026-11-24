@@ -13,6 +13,7 @@ import os
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -791,5 +792,315 @@ def test_offline_casual_chat_never_triggers_web_search(qapp: QApplication, tmp_p
         reply_hi = app.execute_command("Привет, как дела?")
         assert reply_hi == "Привет! Я локальный оператор GupkaCommander. Чем помочь?"
         mock_os.search.assert_not_called()
+    finally:
+        app.shutdown()
+
+
+def test_retry_phrase_routes_to_react_with_last_goal_and_memory_fallback(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """Ретрай с _last_agent_goal или эпизодом из памяти всегда идет в ReActEngine, не в чат."""
+    mock_llm = MagicMock(spec=LocalLLMClient)
+    mock_llm.is_healthy.return_value = True
+    mock_react = MagicMock(spec=ReActEngine)
+    seen_goals: list[str] = []
+
+    def _fake_run(goal: str, on_step_event: object = None) -> str:
+        seen_goals.append(goal)
+        return "Готово."
+
+    mock_react.run.side_effect = _fake_run
+    app, _, _, _, memory = _build_app(qapp, tmp_path, llm_client=mock_llm, react_engine=mock_react)
+    try:
+        orig_goal = "открой антигравити и создай новый проект"
+        app.execute_command(orig_goal)
+        assert app._last_agent_goal == orig_goal
+
+        app.execute_command("Так, давай ещё раз")
+        assert len(seen_goals) == 2
+        assert f"Повторная попытка цели: {orig_goal}" in seen_goals[1]
+        assert "click_screen" in seen_goals[1]
+        assert "press_key" in seen_goals[1]
+        assert "PowerShell" in seen_goals[1]
+        assert app._last_agent_goal == orig_goal
+        mock_llm.generate_response_stream.assert_not_called()
+
+        # Повтор из новой сессии подхватывает последний эпизод из MemoryManager
+        memory.save_episode(
+            goal="открой калькулятор и посчитай 2+2",
+            steps=[],
+            outcome="Не удалось",
+            success=False,
+        )
+        app2, _, _, _, _ = _build_app(qapp, tmp_path, llm_client=mock_llm, react_engine=mock_react)
+        try:
+            app2._last_agent_goal = ""
+            app2.execute_command("попробуй снова")
+            assert "открой калькулятор и посчитай 2+2" in seen_goals[-1]
+            mock_llm.generate_response_stream.assert_not_called()
+        finally:
+            app2.shutdown()
+    finally:
+        app.shutdown()
+
+
+def test_stream_card_always_finishes_on_error_and_interrupt(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """Карточка стриминга всегда переводится в 'error' при исключении или InterruptedError."""
+    mock_llm = MagicMock(spec=LocalLLMClient)
+    mock_llm.is_healthy.return_value = True
+
+    def _failing_stream(_text: str, **_kwargs: object) -> Iterator[str]:
+        yield "Начало ответа... "
+        raise RuntimeError("Сбой SSE потока")
+
+    mock_llm.generate_response_stream.side_effect = _failing_stream
+    app, _, _, mock_failsafe, _ = _build_app(qapp, tmp_path, llm_client=mock_llm)
+    try:
+        err_resp = app.execute_command("Привет, расскажи про Python")
+        assert "ошибка" in err_resp.lower()
+        assert app._active_stream_card is None
+        stream_cards = [
+            c for c in app.spotlight_bar.chat_drawer._cards if c.get_role() == "assistant"
+        ]
+        assert stream_cards
+        assert stream_cards[0].get_status() == "error"
+
+        # Теперь проверяем InterruptedError от FailSafeMonitor посреди стрима
+        def _interrupted_stream(_text: str, **_kwargs: object) -> Iterator[str]:
+            yield "Поток "
+            mock_failsafe.is_interrupted.return_value = True
+            yield "прерван"
+
+        mock_llm.generate_response_stream.side_effect = _interrupted_stream
+        mock_failsafe.is_interrupted.return_value = False
+        app.spotlight_bar.chat_drawer.clear()
+
+        abort_resp = app.execute_command("Привет, как дела?")
+        assert "прервана" in abort_resp.lower()
+        assert app._active_stream_card is None
+        cards_after_abort = [
+            c for c in app.spotlight_bar.chat_drawer._cards if c.get_role() == "assistant"
+        ]
+        assert cards_after_abort
+        assert cards_after_abort[0].get_status() == "error"
+    finally:
+        app.shutdown()
+
+
+def test_refresh_context_chips_reads_win32_foreground_skipping_gupka(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """_refresh_context_chips читает активное окно через Win32, пропуская GupkaCommander."""
+    import ctypes
+
+    app, _, _, _, _ = _build_app(qapp, tmp_path)
+    try:
+        titles = {100: "GupkaCommander", 200: "Antigravity — localAgent"}
+
+        fake_user32 = MagicMock()
+        fake_user32.GetForegroundWindow.return_value = 100
+        fake_user32.GetWindow.side_effect = lambda hwnd, _cmd: 200 if hwnd == 100 else 0
+        fake_user32.IsWindowVisible.return_value = 1
+
+        def _fake_get_text(hwnd: int, buf: object, _max_len: int) -> int:
+            txt = titles.get(hwnd, "")
+            buf.value = txt  # type: ignore[attr-defined]
+            return len(txt)
+
+        fake_user32.GetWindowTextW.side_effect = _fake_get_text
+
+        with (
+            patch("main.os.name", "nt"),
+            patch.object(ctypes, "windll", MagicMock(user32=fake_user32), create=True),
+        ):
+            app._refresh_context_chips()
+
+        app_btn = app.spotlight_bar.context_chip_bar.get_chip_button("app")
+        assert app_btn is not None
+        assert app_btn.text() == "Antigravity — localAgent"
+    finally:
+        app.shutdown()
+
+
+def test_casual_chat_prompt_forbids_refusals_and_stub_scripts(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """Системный промпт LocalLLMClient и _stream_cognitive_response запрещает отказы и заглушки."""
+    from core.brain.llm_client import DEFAULT_CHAT_SYSTEM_PROMPT
+
+    assert "GupkaCommander" in DEFAULT_CHAT_SYSTEM_PROMPT
+    assert "нет доступа к экрану/интерфейсу" in DEFAULT_CHAT_SYSTEM_PROMPT
+    assert "open_app.py" in DEFAULT_CHAT_SYSTEM_PROMPT
+
+    captured_prompts: list[str | None] = []
+    mock_llm = MagicMock(spec=LocalLLMClient)
+    mock_llm.is_healthy.return_value = True
+
+    def _fake_stream(
+        _text: str,
+        system_prompt: str | None = None,
+        history: list[dict[str, str]] | None = None,
+    ) -> Iterator[str]:
+        captured_prompts.append(system_prompt)
+        yield "Готов помочь!"
+
+    mock_llm.generate_response_stream.side_effect = _fake_stream
+    app, _, _, _, memory = _build_app(qapp, tmp_path, llm_client=mock_llm)
+    try:
+        memory.set_fact("редактор", "Antigravity")
+        reply = app.execute_command("Привет, что нового?")
+        assert reply == "Готов помочь!"
+        assert captured_prompts and captured_prompts[0] is not None
+        assert "нет доступа к экрану/интерфейсу" in captured_prompts[0]
+        assert "open_app.py" in captured_prompts[0]
+        assert "Antigravity" in captured_prompts[0]
+    finally:
+        app.shutdown()
+
+
+def test_e2e_electron_launch_vision_som_filter_and_retry(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """Сквозной тест: Electron UIA (4 кнопки рамки) -> Vision без Свернуть -> ретрай."""
+    from core.app_finder import AppInfo
+    from core.vision.monitor_manager import MonitorInfo, MonitorManager
+    from core.vision.screen_capture import ScreenFrame
+    from core.vision.som_annotator import SoMAnnotator
+
+    mock_finder = MagicMock(spec=AppFinder)
+    mock_finder.find.return_value = [
+        AppInfo(name="Antigravity", path=r"C:\Apps\Antigravity.exe", source="test")
+    ]
+    mock_os = MagicMock(spec=OSController)
+    mock_os.resolve_alias.return_value = None
+
+    mon_mgr = MonitorManager(
+        monitors=[MonitorInfo(index=1, left=0, top=0, width=1920, height=1080, is_primary=True)]
+    )
+    mock_sc = MagicMock()
+    mock_sc.capture_frame.return_value = ScreenFrame(
+        width=1920,
+        height=1080,
+        rgb=b"\x20" * (1920 * 1080 * 3),
+        dhash="4444444444444444",
+        monitor_index=1,
+    )
+    mock_uia = MagicMock()
+    mock_uia.inspect_window_elements.return_value = [
+        {
+            "name": name,
+            "control_type": "ButtonControl",
+            "rect": {"left": 1700 + i * 50, "top": 0, "right": 1745 + i * 50, "bottom": 30},
+        }
+        for i, name in enumerate(("Свернуть", "Развернуть", "Восстановить", "Закрыть"))
+    ]
+    som = SoMAnnotator()
+    mock_vision = MagicMock()
+    mock_vision.screen_capture = mock_sc
+    mock_vision.click_at.return_value = True
+
+    mock_llm = MagicMock(spec=LocalLLMClient)
+    mock_llm.tools = []
+    mock_llm.is_healthy.return_value = True
+
+    seen_calls: list[dict[str, Any]] = []
+
+    def _plan_side_effect(**kwargs: Any) -> list[dict[str, Any]]:
+        seen_calls.append(kwargs)
+        step = len(seen_calls)
+        if step == 1:
+            return [{"tool": "open_application", "parameters": {"app_name": "Antigravity"}}]
+        if step == 2:
+            # Имитируем ошибочную попытку нажать [1] на 1-м запуске -> защитный SoM-фильтр отклоняет
+            return [{"tool": "click_som", "parameters": {"mark_id": 1}}]
+        if step == 3:
+            return [
+                {
+                    "tool": "finish_task",
+                    "parameters": {
+                        "summary": "Открыл Antigravity, но проект не создан.",
+                        "success": False,
+                    },
+                }
+            ]
+        # Повторная попытка после "Так, давай ещё раз" -> альтернативные инструменты Vision/hotkey
+        if step == 4:
+            return [
+                {"tool": "press_key", "parameters": {"key": "ctrl+shift+p"}},
+                {"tool": "click_screen", "parameters": {"x": 500, "y": 300}},
+            ]
+        return [
+            {
+                "tool": "finish_task",
+                "parameters": {"summary": "Проект создан через палитру команд.", "success": True},
+            }
+        ]
+
+    mock_llm.plan_actions.side_effect = _plan_side_effect
+
+    memory = MemoryManager(db_path=tmp_path / "e2e_electron.db")
+    from core.agent.tool_registry import ToolRegistry
+
+    fs = FailSafeMonitor()
+    registry = ToolRegistry(
+        os_controller=mock_os,
+        app_finder=mock_finder,
+        uia_manager=mock_uia,
+        vision_agent=mock_vision,
+        som_annotator=som,
+        memory_manager=memory,
+        monitor_manager=mon_mgr,
+        failsafe_monitor=fs,
+    )
+    react_engine = ReActEngine(
+        llm_client=mock_llm,
+        tool_registry=registry,
+        memory_manager=memory,
+        monitor_manager=mon_mgr,
+        uia_manager=mock_uia,
+        screen_capture=mock_sc,
+        som_annotator=som,
+        failsafe_monitor=fs,
+        max_steps=6,
+    )
+
+    app = GupkaCommanderApp(
+        app=qapp,
+        app_finder=mock_finder,
+        os_controller=mock_os,
+        voice_pipeline=MagicMock(spec=VoicePipeline, synthesizer=None),
+        spotlight_bar=SpotlightBar(hide_on_focus_loss=False),
+        tray_manager=TrayManager(),
+        hotkey_manager=HotkeyManager(),
+        llm_client=mock_llm,
+        vision_agent=mock_vision,
+        uia_manager=mock_uia,
+        failsafe_monitor=fs,
+        memory_manager=memory,
+        som_annotator=som,
+        tool_registry=registry,
+        react_engine=react_engine,
+        enable_voice=False,
+        enable_hotkey=False,
+        enable_tray=False,
+    )
+    try:
+        with patch.object(app, "_launch_app", return_value=True):
+            first_resp = app.execute_command("открой антигравити и создай новый проект")
+            assert "проект не создан" in first_resp.lower()
+            assert seen_calls[0]["image_b64"] is not None
+            assert som.last_lookup == {}
+
+            retry_resp = app.execute_command("Так, давай ещё раз")
+            assert retry_resp == "Проект создан через палитру команд."
+            assert (
+                "Повторная попытка цели: открой антигравити и создай новый проект"
+                in seen_calls[3]["prompt"]
+            )
+            mock_vision.hotkey.assert_called_once_with("ctrl", "shift", "p")
+            mock_vision.click_at.assert_called_once()
+            mock_llm.generate_response_stream.assert_not_called()
     finally:
         app.shutdown()

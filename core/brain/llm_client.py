@@ -580,6 +580,12 @@ class FallbackRuleEngine:
 
 DEFAULT_MODEL_NAME: str = "qwen3-vl-4b-instruct"
 QWEN35_MODEL_NAME: str = "qwen3.5-4b"
+DEFAULT_CHAT_SYSTEM_PROMPT: str = (
+    "Ты — локальный автономный агент Windows 11 GupkaCommander с реальными инструментами "
+    "управления ОС, экраном и браузером. Отвечай кратко на русском языке. "
+    "НИКОГДА не пиши, что у тебя «нет доступа к экрану/интерфейсу», и НИКОГДА не выдавай "
+    "пользователю заглушечные Python-скрипты вроде open_app.py вместо действий."
+)
 
 
 class ThinkTagFilter:
@@ -770,9 +776,7 @@ class LocalLLMClient:
 
         При недоступности сервера переключается на FallbackRuleEngine.
         """
-        sys_prompt = system_prompt or (
-            "Ты автономный оператор Windows 11 GupkaCommander. Отвечай кратко на русском языке."
-        )
+        sys_prompt = system_prompt or DEFAULT_CHAT_SYSTEM_PROMPT
         url = f"{self.api_base}/chat/completions"
         payload: dict[str, Any] = {
             "model": self.model_name,
@@ -876,9 +880,7 @@ class LocalLLMClient:
         if not clean_text:
             return
 
-        sys_prompt = system_prompt or (
-            "Ты автономный оператор Windows 11 GupkaCommander. Отвечай кратко на русском языке."
-        )
+        sys_prompt = system_prompt or DEFAULT_CHAT_SYSTEM_PROMPT
         url = f"{self.api_base}/chat/completions"
         payload: dict[str, Any] = {
             "model": self.model_name,

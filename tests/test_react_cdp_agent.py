@@ -114,6 +114,31 @@ class TestExecutionTierRouting:
         res = RouteResult(intent=Intent.OPEN_APP, query="открой telegram", target="telegram")
         assert res.tier == ExecutionTier.FAST_PATH
 
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "давай ещё раз",
+            "так, давай ещё раз",
+            "Так, давай ещё раз!",
+            "давай ещё раз попробуем",
+            "попробуй ещё раз",
+            "попробуй снова",
+            "ещё раз",
+            "повтори",
+            "сделай ещё раз",
+            "попробуй заново",
+        ],
+    )
+    def test_retry_phrases_route_to_autonomous_agent(self, query: str) -> None:
+        """Русские фразы ретрая никогда не попадают в CASUAL_CHAT и помечаются флагом is_retry."""
+        router = IntentRouter()
+        res = router.route(query)
+        assert res.intent == Intent.AI_COGNITIVE
+        assert res.tier == ExecutionTier.AUTONOMOUS_AGENT
+        assert res.matched_rule == "retry_previous_goal"
+        assert res.params.get("is_retry") is True
+        assert router.is_retry_query(query) is True
+
 
 class _FakeCDPWebSocket:
     """Управляемый мок WebSocket-клиента для тестирования BrowserCDPBridge."""
@@ -577,3 +602,143 @@ class TestReActEngineIntegration:
         assert res.aborted is True
         assert res.success is False
         assert "Esc" in res.summary
+
+    def test_react_electron_few_uia_triggers_vision_and_filters_window_chrome(self) -> None:
+        """При <= 6 UIA-элементах (Electron) сразу снимается скриншот, а кнопки рамки скрываются."""
+        mon = MonitorInfo(index=1, left=0, top=0, width=200, height=200, is_primary=True)
+        monitor_mgr = MonitorManager(monitors=[mon])
+
+        screen_cap = MagicMock()
+        screen_cap.capture_frame.return_value = ScreenFrame(
+            width=200,
+            height=200,
+            rgb=b"\x10" * (200 * 200 * 3),
+            dhash="2222222222222222",
+            monitor_index=1,
+        )
+
+        uia = MagicMock()
+        uia.inspect_window_elements.return_value = [
+            {
+                "name": label,
+                "control_type": "ButtonControl",
+                "rect": {"left": 10 + i * 30, "top": 0, "right": 35 + i * 30, "bottom": 25},
+            }
+            for i, label in enumerate(("Свернуть", "Развернуть", "Восстановить", "Закрыть"))
+        ]
+
+        som = SoMAnnotator()
+        fs = FailSafeMonitor()
+        llm = MagicMock(spec=LocalLLMClient)
+        llm.tools = []
+        llm.is_healthy.return_value = True
+
+        seen_images: list[str | None] = []
+        seen_sys_prompts: list[str] = []
+
+        def _plan_side_effect(**kwargs: Any) -> list[dict[str, Any]]:
+            seen_images.append(kwargs.get("image_b64"))
+            seen_sys_prompts.append(str(kwargs.get("system_prompt", "")))
+            if len(seen_images) == 1:
+                return [{"tool": "click_som", "parameters": {"mark_id": 1}}]
+            return [
+                {
+                    "tool": "finish_task",
+                    "parameters": {
+                        "summary": "Проект создан через горячие клавиши.",
+                        "success": True,
+                    },
+                }
+            ]
+
+        llm.plan_actions.side_effect = _plan_side_effect
+
+        vision = MagicMock()
+        registry = ToolRegistry(
+            os_controller=MagicMock(),
+            app_finder=MagicMock(),
+            uia_manager=uia,
+            vision_agent=vision,
+            som_annotator=som,
+            monitor_manager=monitor_mgr,
+            failsafe_monitor=fs,
+        )
+        engine = ReActEngine(
+            llm_client=llm,
+            tool_registry=registry,
+            monitor_manager=monitor_mgr,
+            uia_manager=uia,
+            screen_capture=screen_cap,
+            som_annotator=som,
+            failsafe_monitor=fs,
+            max_steps=4,
+        )
+
+        res = engine.run_task("Открой Antigravity и создай новый проект")
+        assert res.success is True
+        assert seen_images[0] is not None
+        assert som.last_lookup == {}
+        vision.click_at.assert_not_called()
+        assert "open_application" in seen_sys_prompts[0]
+        assert "click_screen" in seen_sys_prompts[0]
+        assert "press_key" in seen_sys_prompts[0]
+        assert "Свернуть/Закрыть" in seen_sys_prompts[0]
+
+    def test_react_keeps_window_chrome_when_goal_requests_window_action(self) -> None:
+        """Если цель явно просит свернуть или закрыть окно, кнопки рамки остаются в SoM."""
+        mon = MonitorInfo(index=1, left=0, top=0, width=200, height=200, is_primary=True)
+        monitor_mgr = MonitorManager(monitors=[mon])
+
+        screen_cap = MagicMock()
+        screen_cap.capture_frame.return_value = ScreenFrame(
+            width=200,
+            height=200,
+            rgb=b"\x10" * (200 * 200 * 3),
+            dhash="3333333333333333",
+            monitor_index=1,
+        )
+
+        uia = MagicMock()
+        uia.inspect_window_elements.return_value = [
+            {
+                "name": "Свернуть",
+                "control_type": "ButtonControl",
+                "rect": {"left": 100, "top": 0, "right": 130, "bottom": 25},
+            },
+            {
+                "name": "Закрыть",
+                "control_type": "ButtonControl",
+                "rect": {"left": 135, "top": 0, "right": 165, "bottom": 25},
+            },
+        ]
+
+        som = SoMAnnotator()
+        fs = FailSafeMonitor()
+        llm = MagicMock(spec=LocalLLMClient)
+        llm.tools = []
+        llm.is_healthy.return_value = True
+        llm.plan_actions.return_value = [
+            {"tool": "finish_task", "parameters": {"summary": "Окно свернуто.", "success": True}}
+        ]
+
+        engine = ReActEngine(
+            llm_client=llm,
+            tool_registry=ToolRegistry(
+                os_controller=MagicMock(),
+                app_finder=MagicMock(),
+                uia_manager=uia,
+                som_annotator=som,
+                monitor_manager=monitor_mgr,
+                failsafe_monitor=fs,
+            ),
+            monitor_manager=monitor_mgr,
+            uia_manager=uia,
+            screen_capture=screen_cap,
+            som_annotator=som,
+            failsafe_monitor=fs,
+            max_steps=2,
+        )
+        res = engine.run_task("Сверни окно редактора")
+        assert res.success is True
+        assert len(som.last_lookup) == 2
+        assert som.last_lookup[1].name == "Свернуть"

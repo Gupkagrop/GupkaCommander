@@ -174,6 +174,28 @@ class IntentRouter:
         r"antigravity|vscode|приложен\w*|программ\w*|рабочем\s+столе|настройк\w*|"
         r"вкладк\w*|кнопк\w*|форм\w*|репозитори\w*)\b"
     )
+    _RETRY_PHRASE_RE = re.compile(
+        r"^(?:(?:так|ну|ок|окей|ладно|хорошо)[,\s]+)?"
+        r"(?:"
+        r"давай\s+ещ[её]\s+раз(?:\s+попробуем|\s+попробуй)?|"
+        r"попробуй\s+ещ[её]\s+раз|"
+        r"попробуй\s+снова|"
+        r"попробуй\s+заново|"
+        r"сделай\s+ещ[её]\s+раз|"
+        r"сделай\s+снова|"
+        r"сделай\s+заново|"
+        r"ещ[её]\s+раз(?:\s+попробуем|\s+попробуй)?|"
+        r"повтори(?:\s+пожалуйста|\s+ещ[её]\s+раз)?"
+        r")"
+        r"(?:[,\s]+пожалуйста)?[.!?…]*$"
+    )
+
+    def is_retry_query(self, query: str) -> bool:
+        """Проверяет, является ли запрос русской командой повтора предыдущей задачи."""
+        lower_query = query.strip().lower()
+        if not lower_query:
+            return False
+        return bool(self._RETRY_PHRASE_RE.match(lower_query))
 
     def _is_compound_autonomous_task(self, lower_query: str) -> bool:
         """Проверяет, является ли запрос составным многошаговым заданием."""
@@ -227,6 +249,17 @@ class IntentRouter:
             )
 
         lower_query = clean_query.lower()
+
+        if self._RETRY_PHRASE_RE.match(lower_query):
+            return RouteResult(
+                intent=Intent.AI_COGNITIVE,
+                query=clean_query,
+                target=clean_query,
+                params={"prompt": clean_query, "is_retry": True},
+                confidence=1.0,
+                matched_rule="retry_previous_goal",
+                tier=ExecutionTier.AUTONOMOUS_AGENT,
+            )
 
         if self._is_compound_autonomous_task(lower_query):
             return RouteResult(

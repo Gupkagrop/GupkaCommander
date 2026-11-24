@@ -13,6 +13,7 @@ import io
 import logging
 import queue
 import threading
+import time
 import wave
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -79,7 +80,8 @@ class QwenTTSSynthesizer:
         speaker_ref_b64: str | None = None,
         speaker_ref_text: str | None = None,
         speaker_ref_path: str | Path | None = None,
-        timeout_seconds: float = 15.0,
+        timeout_seconds: float = 8.0,
+        cooldown_seconds: float = 45.0,
         fallback_synthesizer: SynthesizerProtocol | None = None,
         output_stream_factory: Callable[..., Any] | None = None,
         session: requests.Session | None = None,
@@ -93,6 +95,7 @@ class QwenTTSSynthesizer:
             speaker_ref_text: Текст эталонного аудио (опционально).
             speaker_ref_path: Путь к WAV-файлу эталонного голоса (если speaker_ref_b64 не задан).
             timeout_seconds: Таймаут HTTP-запроса к серверу /tts.
+            cooldown_seconds: Время паузы (circuit breaker) после сбоя /tts перед повтором.
             fallback_synthesizer: Резервный синтезатор (по умолчанию ленивый PiperSynthesizer).
             output_stream_factory: Фабрика потока sounddevice.OutputStream (для тестов).
             session: HTTP-сессия requests.Session (для пулинга и моков).
@@ -103,6 +106,9 @@ class QwenTTSSynthesizer:
         self._speaker_ref_text = speaker_ref_text
         self._speaker_ref_path = Path(speaker_ref_path) if speaker_ref_path is not None else None
         self._timeout_seconds = max(0.5, float(timeout_seconds))
+        self._cooldown_seconds = max(0.0, float(cooldown_seconds))
+        self._cooldown_until: float = 0.0
+        self._circuit_lock: threading.Lock = threading.Lock()
 
         self._fallback_synthesizer: SynthesizerProtocol | None = fallback_synthesizer
         self._output_stream_factory: Callable[..., Any] | None = (
@@ -132,6 +138,20 @@ class QwenTTSSynthesizer:
     def backend(self) -> str:
         """Последний активный бэкенд синтеза ('qwen3-tts' или 'piper-fallback')."""
         return self._backend
+
+    @property
+    def is_in_cooldown(self) -> bool:
+        """Возвращает True, если активен circuit breaker после сбоя Qwen3-TTS."""
+        if self._cooldown_seconds <= 0.0:
+            return False
+        with self._circuit_lock:
+            return time.monotonic() < self._cooldown_until
+
+    def _speak_with_fallback(self, text: str) -> None:
+        """Мгновенно озвучивает текст через резервный PiperSynthesizer."""
+        self._backend = self.BACKEND_FALLBACK
+        fallback = self._get_fallback()
+        fallback.speak(text, blocking=True)
 
     def _get_fallback(self) -> SynthesizerProtocol:
         """Лениво инициализирует и возвращает резервный PiperSynthesizer."""
@@ -366,14 +386,20 @@ class QwenTTSSynthesizer:
             self._finish_session(session_id)
 
     def _play_sentence(self, text: str, stop_event: threading.Event) -> None:
-        """Пытается синтезировать через /tts, при сбое откатывается на Piper."""
+        """Синтезирует через /tts, при сбое включает circuit breaker и откат на Piper."""
         if stop_event.is_set():
+            return
+
+        if self.is_in_cooldown:
+            self._speak_with_fallback(text)
             return
 
         try:
             wav_bytes = self._request_tts_wav(text)
             if stop_event.is_set():
                 return
+            with self._circuit_lock:
+                self._cooldown_until = 0.0
             audio, sample_rate, channels = _decode_wav_to_float32(wav_bytes)
             if self._output_stream_factory is None:
                 raise RuntimeError("Аудиоустройство вывода (sounddevice) недоступно.")
@@ -382,14 +408,16 @@ class QwenTTSSynthesizer:
         except Exception as exc:
             if stop_event.is_set():
                 return
+            if self._cooldown_seconds > 0.0:
+                with self._circuit_lock:
+                    self._cooldown_until = time.monotonic() + self._cooldown_seconds
             logger.warning(
-                "Qwen3-TTS (%s) недоступен (%s). Откат на резервный PiperSynthesizer.",
+                "Qwen3-TTS (%s) недоступен (%s). Откат на PiperSynthesizer (cooldown=%.1f с).",
                 self._base_url,
                 exc,
+                self._cooldown_seconds,
             )
-            self._backend = self.BACKEND_FALLBACK
-            fallback = self._get_fallback()
-            fallback.speak(text, blocking=True)
+            self._speak_with_fallback(text)
 
     def _play_pcm(
         self,

@@ -129,6 +129,33 @@ class TestShellExecutor:
             assert stderr == ""
             mock_run.assert_called_once()
 
+    def test_run_command_sets_utf8_encoding_and_checks_raw_command(self) -> None:
+        """PowerShell запускается с UTF-8 префиксом, а проверка идет до обертки."""
+        executor = ShellExecutor()
+        fake_result = MagicMock()
+        fake_result.returncode = 0
+        fake_result.stdout = "Привет, мир!\n"
+        fake_result.stderr = ""
+
+        with patch("subprocess.run", return_value=fake_result) as mock_run:
+            code, stdout, _ = executor.run_command("Write-Output 'Привет'")
+            assert code == 0
+            assert stdout == "Привет, мир!\n"
+            args, kwargs = mock_run.call_args
+            ps_cmd = args[0][-1]
+            assert "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;" in ps_cmd
+            assert "$OutputEncoding = [System.Text.Encoding]::UTF8;" in ps_cmd
+            assert ps_cmd.endswith("Write-Output 'Привет'")
+            assert kwargs["encoding"] == "utf-8"
+            assert kwargs["errors"] == "replace"
+
+        with patch.object(
+            executor, "is_safe_command", wraps=executor.is_safe_command
+        ) as spy_safety:
+            with pytest.raises(DangerousCommandError):
+                executor.run_command("diskpart")
+            spy_safety.assert_called_once_with("diskpart")
+
     def test_run_command_timeout(self) -> None:
         """Проверка обработки превышения времени ожидания команды."""
         executor = ShellExecutor()

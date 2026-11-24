@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import re
 import time
 from collections.abc import Callable
 from typing import Any, Literal
@@ -40,7 +41,30 @@ _BASE_REACT_SYSTEM_PROMPT = (
     "2) Browser CDP (browser_inspect, browser_click, browser_type, browser_navigate), "
     "3) Windows UIA (inspect_ui_elements, click_ui_element, type_into_ui_element), "
     "4) SoM Vision (click_som, click_screen, type_text, press_key). "
+    "Правила: приложения открывай строго через open_application (не через голый run_command). "
+    "Если UIA видит <= 6 кнопок окна (Electron/IDE: Antigravity, VS Code, браузер), "
+    "используй Vision click_screen(x, y) (координаты 0..1000 по скриншоту), горячие клавиши "
+    "press_key (например ctrl+n, ctrl+shift+p, ctrl+k) или run_command "
+    "(создание папок/файлов и их открытие). "
+    "Никогда не нажимай кнопки рамки окна Свернуть/Закрыть, если пользователь не просил. "
     "Когда цель достигнута, обязательно вызови finish_task с кратким итогом на русском языке."
+)
+
+_WINDOW_CHROME_LABELS: frozenset[str] = frozenset(
+    {
+        "свернуть",
+        "развернуть",
+        "восстановить",
+        "закрыть",
+        "minimize",
+        "maximize",
+        "restore",
+        "close",
+    }
+)
+_WINDOW_CHROME_GOAL_RE = re.compile(
+    r"\b(?:сверн\w*|разверн\w*|восстанов\w*|закр\w*|minimize|maximize|restore|close)\b",
+    re.IGNORECASE,
 )
 
 
@@ -221,7 +245,23 @@ class ReActEngine:
             logger.debug("Ошибка захвата SoM Vision: %s", exc)
             return (None, "")
 
-    def _observe(self, escalate_to_vision: bool) -> _Observation:
+    @staticmethod
+    def _filter_som_elements(
+        goal: str,
+        uia_elements: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Удаляет кнопки рамки окна из SoM-аннотаций, если цель не просит управлять окном."""
+        if not uia_elements or (goal and _WINDOW_CHROME_GOAL_RE.search(goal)):
+            return uia_elements
+        filtered: list[dict[str, Any]] = []
+        for el in uia_elements:
+            label = str(el.get("name") or "").strip().lower()
+            if label in _WINDOW_CHROME_LABELS:
+                continue
+            filtered.append(el)
+        return filtered
+
+    def _observe(self, escalate_to_vision: bool, goal: str = "") -> _Observation:
         """Выполняет фазу Observe с эскалацией каналов (CDP/UIA -> SoM Vision)."""
         monitor = self._get_active_monitor()
         parts: list[str] = [
@@ -238,11 +278,14 @@ class ReActEngine:
             parts.append(uia_block)
 
         need_vision = (
-            escalate_to_vision or self.always_capture_vision or (not cdp_block and not uia_block)
+            escalate_to_vision
+            or self.always_capture_vision
+            or (not cdp_block and len(uia_elements) <= 6)
         )
         image_b64: str | None = None
         if need_vision:
-            image_b64, som_block = self._observe_vision_som(monitor, uia_elements)
+            som_candidates = self._filter_som_elements(goal, uia_elements)
+            image_b64, som_block = self._observe_vision_som(monitor, som_candidates)
             if som_block:
                 parts.append(som_block)
 
@@ -546,7 +589,7 @@ class ReActEngine:
         try:
             for step_idx in range(1, self.max_steps + 1):
                 self.step_verifier.check_failsafe()
-                obs = self._observe(escalate_to_vision)
+                obs = self._observe(escalate_to_vision, goal=clean_goal)
                 last_app_ctx = obs.app_context
 
                 actions = self._plan_step_actions(

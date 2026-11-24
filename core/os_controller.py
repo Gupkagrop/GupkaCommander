@@ -229,17 +229,24 @@ class ShellExecutor:
         if not is_safe:
             raise DangerousCommandError(f"Команда отклонена: обнаружен опасный шаблон '{pattern}'")
 
+        ps_command = (
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+            "$OutputEncoding = [System.Text.Encoding]::UTF8; "
+            f"{command}"
+        )
         cmd_args: list[str] = [
             "powershell",
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            command,
+            ps_command,
         ]
 
         kwargs: dict[str, Any] = {
             "capture_output": True,
             "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
             "timeout": timeout,
             "check": False,
         }
