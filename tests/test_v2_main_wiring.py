@@ -501,3 +501,201 @@ def test_open_settings_dialog_reloads_voice_engines_and_starts_tts(
             mock_llama.start_tts.assert_called_once()
         finally:
             app.shutdown()
+
+
+def test_voice_pipeline_speaker_ref_and_release_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """VoicePipeline подставляет default_speaker_ru.wav, читает settings и освобождает модели."""
+    from core.paths import get_asset_path
+    from core.voice.qwen_tts_synthesizer import QwenTTSSynthesizer
+    from core.voice.voice_pipeline import DEFAULT_SPEAKER_REF_FILENAME, DEFAULT_SPEAKER_REF_TEXT
+
+    default_wav = get_asset_path(DEFAULT_SPEAKER_REF_FILENAME)
+    assert default_wav.is_file()
+
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "models": {
+                    "stt": {"engine": "gigaam-v3"},
+                    "tts": {"engine": "qwen3-tts", "lang": "ru", "port": 8081},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    pipeline = VoicePipeline.from_settings(settings_path=settings_file)
+    synth = pipeline.synthesizer
+    assert isinstance(synth, QwenTTSSynthesizer)
+    assert synth._lang == "ru"
+    assert synth._speaker_ref_path == default_wav
+    assert synth._speaker_ref_text == DEFAULT_SPEAKER_REF_TEXT
+
+    # Проверяем явное переопределение speaker_ref_path/text в settings.json
+    custom_wav = tmp_path / "custom.wav"
+    custom_wav.write_bytes(b"RIFF-CUSTOM")
+    settings_file.write_text(
+        json.dumps(
+            {
+                "models": {
+                    "tts": {
+                        "engine": "qwen3-tts",
+                        "lang": "en",
+                        "port": 8081,
+                        "speaker_ref_path": str(custom_wav),
+                        "speaker_ref_text": "Custom reference text.",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    pipeline.reload_engines_from_settings()
+    custom_synth = pipeline.synthesizer
+    assert isinstance(custom_synth, QwenTTSSynthesizer)
+    assert custom_synth._lang == "en"
+    assert custom_synth._speaker_ref_path == custom_wav
+    assert custom_synth._speaker_ref_text == "Custom reference text."
+
+    # release_models() останавливает ленивый синтезатор, сбрасывает ссылки и вызывает gc.collect()
+    import gc
+
+    pipeline._vad_detector = MagicMock()
+    pipeline._transcriber = MagicMock()
+    gc_called = [False]
+    orig_gc = gc.collect
+
+    def _spy_gc() -> int:
+        gc_called[0] = True
+        return orig_gc()
+
+    monkeypatch.setattr("core.voice.voice_pipeline.gc.collect", _spy_gc)
+    with patch.object(custom_synth, "stop", wraps=custom_synth.stop) as spy_stop:
+        pipeline.release_models()
+        spy_stop.assert_called_once()
+
+    assert pipeline._vad_detector is None
+    assert pipeline._transcriber is None
+    assert pipeline._synthesizer is None
+    assert gc_called[0] is True
+
+
+def test_app_dependency_lock_release_and_restart_hooks(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_release_dependency_locks и _on_dependencies_changed управляют блокировками и VAD."""
+    mock_llama = MagicMock(spec=LlamaServerManager)
+    mock_voice = MagicMock(spec=VoicePipeline)
+    mock_voice.synthesizer = None
+    mock_voice.is_running.return_value = True
+
+    app = GupkaCommanderApp(
+        app=qapp,
+        app_finder=MagicMock(spec=AppFinder),
+        os_controller=MagicMock(spec=OSController),
+        voice_pipeline=mock_voice,
+        spotlight_bar=SpotlightBar(hide_on_focus_loss=False),
+        tray_manager=TrayManager(),
+        hotkey_manager=HotkeyManager(),
+        llm_client=MagicMock(spec=LocalLLMClient),
+        failsafe_monitor=MagicMock(spec=FailSafeMonitor),
+        memory_manager=MemoryManager(db_path=tmp_path / "locks.db"),
+        llama_manager=mock_llama,
+        enable_voice=True,
+        enable_hotkey=False,
+        enable_tray=False,
+    )
+    try:
+        # 1. Снятие блокировок останавливает llama_manager, voice_pipeline и вызывает release_models
+        app._release_dependency_locks()
+        mock_llama.stop.assert_called_once()
+        mock_voice.stop.assert_called_once()
+        mock_voice.release_models.assert_called_once()
+
+        # 2. Если silero_vad удален — голос НЕ перезапускается
+        mock_report_missing = MagicMock()
+        mock_report_missing.items = [MagicMock(id="silero_vad", installed=False)]
+        with patch("core.bootstrap.DependencyManager") as mock_dep_cls:
+            mock_dep_cls.return_value.inspect.return_value = mock_report_missing
+            app._on_dependencies_changed()
+
+        mock_voice.reload_engines_from_settings.assert_called_once()
+        mock_voice.start.assert_not_called()
+
+        # 3. Если голос работал до удаления и silero_vad на диске — перезапускается
+        app._release_dependency_locks()
+        mock_report_present = MagicMock()
+        mock_report_present.items = [MagicMock(id="silero_vad", installed=True)]
+        with patch("core.bootstrap.DependencyManager") as mock_dep_cls:
+            mock_dep_cls.return_value.inspect.return_value = mock_report_present
+            app._on_dependencies_changed()
+
+        mock_voice.start.assert_called_once()
+
+        # 4. open_dependency_manager пробрасывает хуки в DependencySetupDialog
+        with patch("gui.setup_dialog.DependencySetupDialog") as mock_dlg_cls:
+            app.open_dependency_manager()
+            kwargs = mock_dlg_cls.call_args.kwargs
+            assert kwargs["manage_mode"] is True
+            assert kwargs["on_before_delete"] == app._release_dependency_locks
+            assert kwargs["on_after_delete"] == app._on_dependencies_changed
+    finally:
+        app.shutdown()
+
+
+def test_cli_remove_dependencies_yes_and_installer_iss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CLI --remove-dependencies --yes удаляет models/bin в GUPKA_DATA_DIR без GUI."""
+    import sys
+
+    import main as main_mod
+
+    monkeypatch.setenv("GUPKA_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("core.bootstrap.shutil.which", lambda _n: None)
+    monkeypatch.setattr("core.bootstrap.get_bundle_root", lambda: tmp_path / "bundle")
+
+    models_dir = tmp_path / "models"
+    bin_dir = tmp_path / "bin"
+    config_dir = tmp_path / "config"
+    models_dir.mkdir()
+    bin_dir.mkdir()
+    config_dir.mkdir()
+    (models_dir / "silero_vad.onnx").write_bytes(b"v" * 2048)
+    (bin_dir / "llama-server.exe").write_bytes(b"MZ" * 1024)
+    memory_db = config_dir / "memory.db"
+    memory_db.write_bytes(b"keep")
+
+    monkeypatch.setattr(sys, "argv", ["main.py", "--remove-dependencies", "--yes"])
+    args = main_mod.parse_arguments()
+    assert args.remove_dependencies is True
+    assert args.yes is True
+
+    # Убеждаемся, что QApplication не создается повторно при --remove-dependencies
+    with patch("main.QApplication") as mock_qapp:
+        exit_code = main_mod.main()
+        mock_qapp.assert_not_called()
+
+    assert exit_code == 0
+    assert not (models_dir / "silero_vad.onnx").exists()
+    assert not (bin_dir / "llama-server.exe").exists()
+    assert memory_db.exists()
+    captured = capsys.readouterr()
+    assert "удалено файлов — 2" in captured.out
+
+    # Проверка секции [UninstallDelete] в scripts/installer.iss
+    iss_path = Path(__file__).resolve().parent.parent / "scripts" / "installer.iss"
+    iss_text = iss_path.read_text(encoding="utf-8")
+    assert "[UninstallDelete]" in iss_text
+    uninstall_section = iss_text.split("[UninstallDelete]")[1]
+    assert r"{localappdata}\GupkaCommander\models" in uninstall_section
+    assert r"{localappdata}\GupkaCommander\bin" in uninstall_section
+    assert "Type: filesandordirs" in uninstall_section
+    delete_entries = [
+        line for line in uninstall_section.splitlines() if line.strip().startswith("Type:")
+    ]
+    assert len(delete_entries) == 2
+    assert all("config" not in line and "memory.db" not in line for line in delete_entries)

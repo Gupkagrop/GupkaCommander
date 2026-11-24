@@ -6,18 +6,37 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
+from core.paths import get_asset_path
+
 logger = logging.getLogger(__name__)
+
+DEFAULT_SPEAKER_REF_FILENAME = "default_speaker_ru.wav"
+DEFAULT_SPEAKER_REF_TEXT = "Привет! Я Губка Коммандер, локальный голосовой помощник для Windows."
+
+
+@dataclass(frozen=True)
+class _EngineConfig:
+    """Параметры голосовых движков, считанные из settings.json."""
+
+    stt_engine: str
+    tts_engine: str
+    tts_base_url: str
+    tts_lang: str
+    speaker_ref_path: Path | None
+    speaker_ref_text: str | None
 
 
 class PipelineState(StrEnum):
@@ -90,6 +109,9 @@ class VoicePipeline:
         stt_engine: str = "faster-whisper",
         tts_engine: str = "piper",
         tts_base_url: str = "http://127.0.0.1:8081",
+        tts_lang: str = "ru",
+        speaker_ref_path: str | Path | None = None,
+        speaker_ref_text: str | None = None,
         settings_path: Path | None = None,
     ) -> None:
         """Инициализация голосового конвейера с внедрением зависимостей."""
@@ -97,6 +119,7 @@ class VoicePipeline:
         self._vad_detector = vad_detector
         self._transcriber = transcriber
         self._synthesizer = synthesizer
+        self._injected_vad: bool = vad_detector is not None
         self._injected_transcriber: bool = transcriber is not None
         self._injected_synthesizer: bool = synthesizer is not None
 
@@ -109,6 +132,11 @@ class VoicePipeline:
         self._stt_engine = stt_engine
         self._tts_engine = tts_engine
         self._tts_base_url = tts_base_url
+        self._tts_lang = (tts_lang or "ru").strip() or "ru"
+        self._speaker_ref_path: Path | None = (
+            Path(speaker_ref_path) if speaker_ref_path is not None else None
+        )
+        self._speaker_ref_text = speaker_ref_text
         self._settings_path = settings_path
 
         self.on_state_changed = on_state_changed
@@ -154,56 +182,93 @@ class VoicePipeline:
         **kwargs: Any,
     ) -> VoicePipeline:
         """Создает VoicePipeline, считывая выбранные движки STT/TTS из settings.json."""
-        stt_eng, tts_eng, tts_url = cls._read_engine_config(settings_path)
-        kwargs.setdefault("stt_engine", stt_eng)
-        kwargs.setdefault("tts_engine", tts_eng)
-        kwargs.setdefault("tts_base_url", tts_url)
+        cfg = cls._read_engine_config(settings_path)
+        kwargs.setdefault("stt_engine", cfg.stt_engine)
+        kwargs.setdefault("tts_engine", cfg.tts_engine)
+        kwargs.setdefault("tts_base_url", cfg.tts_base_url)
+        kwargs.setdefault("tts_lang", cfg.tts_lang)
+        kwargs.setdefault("speaker_ref_path", cfg.speaker_ref_path)
+        kwargs.setdefault("speaker_ref_text", cfg.speaker_ref_text)
         kwargs.setdefault("settings_path", settings_path)
         return cls(**kwargs)
 
     @staticmethod
-    def _read_engine_config(settings_path: Path | None = None) -> tuple[str, str, str]:
-        """Считывает (stt_engine, tts_engine, tts_base_url) из settings.json."""
+    def _resolve_default_speaker_ref(
+        raw_path: object, raw_text: object
+    ) -> tuple[Path | None, str | None]:
+        """Определяет путь и текст эталонного голоса (или дефолтный WAV из assets)."""
+        ref_path_str = str(raw_path).strip() if raw_path else ""
+        ref_text_str = str(raw_text).strip() if raw_text else ""
+        if ref_path_str:
+            return Path(ref_path_str), (ref_text_str or None)
+
+        default_ref = get_asset_path(DEFAULT_SPEAKER_REF_FILENAME)
+        if default_ref.is_file():
+            return default_ref, (ref_text_str or DEFAULT_SPEAKER_REF_TEXT)
+        return None, (ref_text_str or None)
+
+    @classmethod
+    def _read_engine_config(cls, settings_path: Path | None = None) -> _EngineConfig:
+        """Считывает параметры движков STT/TTS и speaker_ref из settings.json."""
         from core.paths import get_config_path
 
         path = settings_path if settings_path is not None else get_config_path("settings.json")
         stt_engine = "faster-whisper"
         tts_engine = "piper"
         tts_base_url = "http://127.0.0.1:8081"
-        if not path.is_file():
-            return stt_engine, tts_engine, tts_base_url
+        tts_lang = "ru"
+        raw_ref_path: object = None
+        raw_ref_text: object = None
 
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            models_cfg = data.get("models", {})
-            if isinstance(models_cfg, dict):
-                stt_cfg = models_cfg.get("stt", {})
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                models_cfg = data.get("models", {}) if isinstance(data, dict) else {}
+                stt_cfg = models_cfg.get("stt", {}) if isinstance(models_cfg, dict) else {}
                 if isinstance(stt_cfg, dict) and stt_cfg.get("engine"):
                     stt_engine = str(stt_cfg["engine"])
-                tts_cfg = models_cfg.get("tts", {})
+
+                tts_cfg = models_cfg.get("tts", {}) if isinstance(models_cfg, dict) else {}
                 if isinstance(tts_cfg, dict):
                     if tts_cfg.get("engine"):
                         tts_engine = str(tts_cfg["engine"])
                     if tts_cfg.get("port"):
                         tts_base_url = f"http://127.0.0.1:{int(tts_cfg['port'])}"
-        except Exception as exc:
-            logger.debug("Ошибка чтения конфигурации голосовых движков из %s: %s", path, exc)
+                    if tts_cfg.get("lang"):
+                        tts_lang = str(tts_cfg["lang"]).strip() or "ru"
+                    raw_ref_path = tts_cfg.get("speaker_ref_path")
+                    raw_ref_text = tts_cfg.get("speaker_ref_text")
+            except Exception as exc:
+                logger.debug("Ошибка чтения конфигурации голосовых движков из %s: %s", path, exc)
 
-        return stt_engine, tts_engine, tts_base_url
+        speaker_ref_path, speaker_ref_text = cls._resolve_default_speaker_ref(
+            raw_ref_path, raw_ref_text
+        )
+        return _EngineConfig(
+            stt_engine=stt_engine,
+            tts_engine=tts_engine,
+            tts_base_url=tts_base_url,
+            tts_lang=tts_lang,
+            speaker_ref_path=speaker_ref_path,
+            speaker_ref_text=speaker_ref_text,
+        )
 
     def _resolve_stt_engine(self) -> str:
         """Возвращает нормализованный идентификатор STT-движка."""
         if self._stt_engine == "auto":
-            stt_eng, _, _ = self._read_engine_config(self._settings_path)
-            return stt_eng.strip().lower()
+            cfg = self._read_engine_config(self._settings_path)
+            return cfg.stt_engine.strip().lower()
         return self._stt_engine.strip().lower()
 
     def _resolve_tts_engine(self) -> str:
         """Возвращает нормализованный идентификатор TTS-движка."""
         if self._tts_engine == "auto":
-            _, tts_eng, tts_url = self._read_engine_config(self._settings_path)
-            self._tts_base_url = tts_url
-            return tts_eng.strip().lower()
+            cfg = self._read_engine_config(self._settings_path)
+            self._tts_base_url = cfg.tts_base_url
+            self._tts_lang = cfg.tts_lang
+            self._speaker_ref_path = cfg.speaker_ref_path
+            self._speaker_ref_text = cfg.speaker_ref_text
+            return cfg.tts_engine.strip().lower()
         return self._tts_engine.strip().lower()
 
     @property
@@ -229,7 +294,16 @@ class VoicePipeline:
             if engine in {"qwen3-tts", "qwen-tts", "qwen_tts"}:
                 from core.voice.qwen_tts_synthesizer import QwenTTSSynthesizer
 
-                self._synthesizer = QwenTTSSynthesizer(base_url=self._tts_base_url)
+                ref_path = self._speaker_ref_path
+                ref_text = self._speaker_ref_text
+                if ref_path is None:
+                    ref_path, ref_text = self._resolve_default_speaker_ref(None, ref_text)
+                self._synthesizer = QwenTTSSynthesizer(
+                    base_url=self._tts_base_url,
+                    lang=self._tts_lang,
+                    speaker_ref_path=ref_path,
+                    speaker_ref_text=ref_text,
+                )
             else:
                 from core.voice.synthesizer import PiperSynthesizer
 
@@ -238,19 +312,25 @@ class VoicePipeline:
 
     def reload_engines_from_settings(self) -> None:
         """Перечитывает движки STT/TTS из settings.json и сбрасывает ленивые инстансы."""
-        new_stt, new_tts, new_tts_url = self._read_engine_config(self._settings_path)
+        cfg = self._read_engine_config(self._settings_path)
         old_synth: SynthesizerProtocol | None = None
 
         with self._state_lock:
-            stt_changed = new_stt.strip().lower() != self._stt_engine.strip().lower()
+            stt_changed = cfg.stt_engine.strip().lower() != self._stt_engine.strip().lower()
             tts_changed = (
-                new_tts.strip().lower() != self._tts_engine.strip().lower()
-                or new_tts_url != self._tts_base_url
+                cfg.tts_engine.strip().lower() != self._tts_engine.strip().lower()
+                or cfg.tts_base_url != self._tts_base_url
+                or cfg.tts_lang != self._tts_lang
+                or cfg.speaker_ref_path != self._speaker_ref_path
+                or cfg.speaker_ref_text != self._speaker_ref_text
             )
 
-            self._stt_engine = new_stt
-            self._tts_engine = new_tts
-            self._tts_base_url = new_tts_url
+            self._stt_engine = cfg.stt_engine
+            self._tts_engine = cfg.tts_engine
+            self._tts_base_url = cfg.tts_base_url
+            self._tts_lang = cfg.tts_lang
+            self._speaker_ref_path = cfg.speaker_ref_path
+            self._speaker_ref_text = cfg.speaker_ref_text
 
             if stt_changed and not self._injected_transcriber:
                 self._transcriber = None
@@ -264,6 +344,25 @@ class VoicePipeline:
                 old_synth.stop()
             except Exception as exc:
                 logger.debug("Ошибка остановки прежнего синтезатора при смене настроек: %s", exc)
+
+    def release_models(self) -> None:
+        """Безопасно останавливает синтезатор и сбрасывает ссылки на модели для снятия lock-ов."""
+        with self._state_lock:
+            old_synth = self._synthesizer
+            if old_synth is not None:
+                try:
+                    old_synth.stop()
+                except Exception as exc:
+                    logger.debug("Ошибка остановки синтезатора при освобождении моделей: %s", exc)
+
+            if not self._injected_vad:
+                self._vad_detector = None
+            if not self._injected_transcriber:
+                self._transcriber = None
+            if not self._injected_synthesizer:
+                self._synthesizer = None
+
+        gc.collect()
 
     @property
     def state(self) -> PipelineState:

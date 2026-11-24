@@ -148,6 +148,26 @@ class DownloadResult:
         return not self.cancelled and len(self.failed) == 0
 
 
+@dataclass
+class DeleteResult:
+    """Итог безопасного удаления локальных зависимостей."""
+
+    deleted_items: list[str] = field(default_factory=list)
+    deleted_files: int = 0
+    freed_bytes: int = 0
+    failed: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def freed_mb(self) -> float:
+        """Объем освобожденного места на диске в мегабайтах."""
+        return self.freed_bytes / (1024 * 1024)
+
+    @property
+    def ok(self) -> bool:
+        """Возвращает True, если удаление завершилось без ошибок."""
+        return len(self.failed) == 0
+
+
 @dataclass(frozen=True)
 class BootstrapReport:
     """Отчет инспекции локального окружения и установленных зависимостей."""
@@ -254,6 +274,57 @@ def _safe_extract_zip(zip_path: Path, dest_dir: Path) -> list[Path]:
             extracted.append(member_path)
 
     return extracted
+
+
+def _assert_strictly_inside(path: Path, allowed_resolved: Path) -> None:
+    """Проверяет, что путь и его реальный target находятся строго внутри allowed_resolved."""
+    lexical = Path(os.path.abspath(path))
+    if lexical == allowed_resolved or not lexical.is_relative_to(allowed_resolved):
+        raise ValueError(f"Запрещенное удаление вне '{allowed_resolved}': {path}")
+    resolved = path.resolve(strict=False)
+    if resolved == allowed_resolved or not resolved.is_relative_to(allowed_resolved):
+        raise ValueError(f"Путь '{resolved}' выходит за пределы '{allowed_resolved}'.")
+
+
+def _safe_remove_path_stats(path: Path, allowed_root: Path) -> tuple[int, int]:
+    """Удаляет файл/подкаталог внутри allowed_root, возвращая (freed_bytes, deleted_files)."""
+    allowed_resolved = allowed_root.resolve(strict=False)
+    _assert_strictly_inside(path, allowed_resolved)
+
+    is_junction = hasattr(path, "is_junction") and path.is_junction()
+    is_link = path.is_symlink() or is_junction
+    if not path.exists() and not is_link:
+        return 0, 0
+
+    if is_link:
+        try:
+            path.unlink()
+        except OSError:
+            path.rmdir()
+        return 0, 1
+
+    if path.is_file():
+        size = path.stat().st_size
+        path.unlink()
+        return size, 1
+
+    if path.is_dir():
+        freed = 0
+        files_count = 0
+        for child in list(path.iterdir()):
+            c_freed, c_files = _safe_remove_path_stats(child, allowed_resolved)
+            freed += c_freed
+            files_count += c_files
+        path.rmdir()
+        return freed, files_count
+
+    return 0, 0
+
+
+def _safe_remove_path(path: Path, allowed_root: Path) -> int:
+    """Безопасно удаляет файл или каталог строго внутри allowed_root и возвращает байты."""
+    freed_bytes, _ = _safe_remove_path_stats(path, allowed_root)
+    return freed_bytes
 
 
 class DependencyManager:
@@ -810,3 +881,158 @@ class DependencyManager:
                 _notify(lbl, downloaded, total, speed, frac)
 
             self._download_single_file(spec, dest_path, http, cancel, _emit_file_progress)
+
+    @staticmethod
+    def _sum_path_bytes(path: Path) -> int:
+        """Суммирует размер обычного файла или всех файлов в каталоге (без симлинков)."""
+        if path.is_symlink():
+            return 0
+        if path.is_file():
+            try:
+                return path.stat().st_size
+            except OSError:
+                return 0
+        if not path.is_dir():
+            return 0
+        total = 0
+        for child in path.rglob("*"):
+            if child.is_file() and not child.is_symlink():
+                try:
+                    total += child.stat().st_size
+                except OSError:
+                    continue
+        return total
+
+    def _collect_item_targets(self, item_id: str) -> tuple[Path, list[Path], list[Path]]:
+        """Возвращает (allowed_root, target_paths, prune_dirs) для указанного компонента."""
+        if item_id == "llama_server":
+            targets = list(self.bin_dir.iterdir()) if self.bin_dir.is_dir() else []
+            return self.bin_dir, targets, []
+
+        if item_id == "faster_whisper":
+            whisper_dir = self.models_dir / "whisper"
+            return self.models_dir, [whisper_dir, self.models_dir / "whisper.part"], []
+
+        specs = self._get_file_specs(item_id)
+        if not specs:
+            raise ValueError(f"Неизвестный идентификатор зависимости: {item_id}")
+
+        raw_targets: list[Path] = []
+        for spec in specs:
+            dest = self.models_dir / spec.relative_path
+            raw_targets.append(dest)
+            raw_targets.append(dest.with_suffix(dest.suffix + ".part"))
+
+        prune_dirs: list[Path] = []
+        if item_id in {"piper_tts", "gigaam_v3", "qwen3_tts", "vlm_qwen"}:
+            subdir_map = {
+                "piper_tts": "piper",
+                "gigaam_v3": "gigaam",
+                "qwen3_tts": "tts",
+                "vlm_qwen": "llm",
+            }
+            sub_dir = self.models_dir / subdir_map[item_id]
+            prune_dirs.append(sub_dir)
+            if item_id == "vlm_qwen" and sub_dir.is_dir():
+                raw_targets.extend(self._collect_vlm_legacy_paths(sub_dir))
+
+        return self.models_dir, self._dedupe_paths(raw_targets), prune_dirs
+
+    @staticmethod
+    def _collect_vlm_legacy_paths(llm_dir: Path) -> list[Path]:
+        """Собирает все GGUF/mmproj и .part файлы VLM (включая legacy v1) в models/llm."""
+        matched: list[Path] = []
+        for entry in llm_dir.iterdir():
+            low = entry.name.lower()
+            is_legacy_v1 = low.startswith("qwen3-vl-4b") or low.startswith("mmproj-qwen3-vl")
+            is_gguf = low.endswith(".gguf") or low.endswith(".gguf.part")
+            if is_legacy_v1 or is_gguf:
+                matched.append(entry)
+        return matched
+
+    @staticmethod
+    def _dedupe_paths(paths: list[Path]) -> list[Path]:
+        """Удаляет дубликаты путей, сохраняя исходный порядок."""
+        seen: set[Path] = set()
+        unique: list[Path] = []
+        for p in paths:
+            norm = Path(os.path.abspath(p))
+            if norm not in seen:
+                seen.add(norm)
+                unique.append(p)
+        return unique
+
+    @staticmethod
+    def _prune_empty_dirs(allowed_root: Path, dirs: list[Path]) -> None:
+        """Удаляет пустые подкаталоги строго внутри allowed_root."""
+        root_resolved = allowed_root.resolve(strict=False)
+        for d in dirs:
+            try:
+                d_resolved = d.resolve(strict=False)
+                if d_resolved == root_resolved or not d_resolved.is_relative_to(root_resolved):
+                    continue
+                if d.is_dir() and not d.is_symlink() and not any(d.iterdir()):
+                    d.rmdir()
+            except OSError:
+                continue
+
+    def get_installed_size_mb(self, item_id: str | None = None) -> float:
+        """Возвращает реальный объем на диске (МБ) для элемента или всех моделей и bin."""
+        if item_id is None:
+            total_bytes = self._sum_path_bytes(self.models_dir) + self._sum_path_bytes(self.bin_dir)
+            return total_bytes / (1024 * 1024)
+
+        try:
+            _root, targets, _prune = self._collect_item_targets(item_id)
+        except ValueError:
+            return 0.0
+        total_bytes = sum(self._sum_path_bytes(t) for t in targets)
+        return total_bytes / (1024 * 1024)
+
+    def delete_item(self, item_id: str) -> DeleteResult:
+        """Безопасно удаляет файлы указанной зависимости и очищает пустые подкаталоги."""
+        result = DeleteResult()
+        try:
+            allowed_root, targets, prune_dirs = self._collect_item_targets(item_id)
+        except ValueError as exc:
+            result.failed[item_id] = str(exc)
+            return result
+
+        for target in targets:
+            try:
+                freed, files_removed = _safe_remove_path_stats(target, allowed_root)
+                result.freed_bytes += freed
+                result.deleted_files += files_removed
+            except (OSError, ValueError) as exc:
+                logger.warning("Не удалось удалить '%s' (%s): %s", target, item_id, exc)
+                result.failed[item_id] = str(exc)
+
+        self._prune_empty_dirs(allowed_root, prune_dirs)
+        if result.deleted_files > 0 and item_id not in result.failed:
+            result.deleted_items.append(item_id)
+        return result
+
+    def delete_all_dependencies(self, *, reset_skip_prompt: bool = True) -> DeleteResult:
+        """Безопасно удаляет все содержимое models_dir и bin_dir без затрагивания config/."""
+        pre_installed = [it.id for it in self.inspect().items if it.installed]
+        result = DeleteResult()
+
+        for root in (self.models_dir, self.bin_dir):
+            if not root.is_dir():
+                continue
+            for child in list(root.iterdir()):
+                try:
+                    freed, files_removed = _safe_remove_path_stats(child, root)
+                    result.freed_bytes += freed
+                    result.deleted_files += files_removed
+                except (OSError, ValueError) as exc:
+                    logger.warning("Не удалось удалить '%s': %s", child, exc)
+                    result.failed[child.name] = str(exc)
+
+        post_installed = {it.id for it in self.inspect().items if it.installed}
+        result.deleted_items = [iid for iid in pre_installed if iid not in post_installed]
+
+        if reset_skip_prompt:
+            self.save_skip_prompt(False)
+
+        return result

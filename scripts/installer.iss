@@ -55,3 +55,8 @@ Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameter
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallDelete]
+; Удаляем скачанные модели и llama-server при деинсталляции, сохраняя config\memory.db и settings.json
+Type: filesandordirs; Name: "{localappdata}\GupkaCommander\models"
+Type: filesandordirs; Name: "{localappdata}\GupkaCommander\bin"

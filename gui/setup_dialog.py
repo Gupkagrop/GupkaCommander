@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from typing import override
 
 from PySide6.QtCore import Qt, QThread, Signal
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -30,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from core.bootstrap import (
     BootstrapReport,
+    DeleteResult,
     DependencyItem,
     DependencyManager,
     DownloadProgress,
@@ -133,6 +136,23 @@ QPushButton#accentButton:hover {{
     background-color: {tokens.sponge_ochre};
     color: #1B1D22;
 }}
+QPushButton#cardDeleteBtn,
+QPushButton#dangerButton {{
+    background-color: {tokens.danger_soft};
+    color: {tokens.danger};
+    border: 1px solid {tokens.danger_border};
+    border-radius: 8px;
+    font-weight: 600;
+}}
+QPushButton#cardDeleteBtn {{
+    padding: 3px 10px;
+    font-size: 11px;
+}}
+QPushButton#cardDeleteBtn:hover,
+QPushButton#dangerButton:hover {{
+    background-color: {tokens.danger};
+    color: #FFFFFF;
+}}
 QScrollBar:vertical {{
     background: transparent;
     width: 6px;
@@ -192,6 +212,10 @@ class DependencySetupDialog(QDialog):
         manager: DependencyManager | None = None,
         manage_mode: bool = False,
         parent: QWidget | None = None,
+        *,
+        on_before_delete: Callable[[], None] | None = None,
+        on_after_delete: Callable[[], None] | None = None,
+        confirm_delete: Callable[[str, str], bool] | None = None,
     ) -> None:
         """Инициализирует диалог первичной настройки зависимостей.
 
@@ -199,20 +223,27 @@ class DependencySetupDialog(QDialog):
             manager: Экземпляр DependencyManager (для внедрения в тестах).
             manage_mode: Если True, окно открыто вручную из трея (скрывает чекбокс «Не показывать»).
             parent: Родительский виджет Qt.
+            on_before_delete: Хук освобождения блокировок перед удалением моделей/бинарников.
+            on_after_delete: Хук обновления подсистем после удаления зависимостей.
+            confirm_delete: Функция подтверждения удаления `(title, message) -> bool`.
         """
         super().__init__(parent)
         self._manager = manager or DependencyManager()
         self._manage_mode = manage_mode
+        self._on_before_delete = on_before_delete
+        self._on_after_delete = on_after_delete
+        self._confirm_delete = confirm_delete
         self._report: BootstrapReport = self._manager.inspect()
         self._checkboxes: dict[str, QCheckBox] = {}
         self._status_labels: dict[str, QLabel] = {}
+        self._delete_buttons: dict[str, QPushButton] = {}
         self._worker: DependencyDownloadWorker | None = None
         self._last_result: DownloadResult | None = None
         self._completed_successfully: bool = False
 
         self.setObjectName("setupDialog")
         self.setWindowTitle("GupkaCommander — Загрузка компонентов")
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(600)
         self.setModal(True)
         self._tokens: ThemeTokens = ThemeManager.resolve_tokens(ThemeMode.SYSTEM)
         self.setStyleSheet(_build_setup_stylesheet(self._tokens))
@@ -222,6 +253,7 @@ class DependencySetupDialog(QDialog):
             self.setWindowIcon(QIcon(str(icon_path)))
 
         self._build_ui()
+        self._refresh_storage_and_delete_all()
         self._refresh_selection_summary()
 
     @property
@@ -233,6 +265,11 @@ class DependencySetupDialog(QDialog):
     def checkboxes(self) -> dict[str, QCheckBox]:
         """Словарь чекбоксов компонентов по их идентификаторам."""
         return self._checkboxes
+
+    @property
+    def delete_buttons(self) -> dict[str, QPushButton]:
+        """Словарь кнопок удаления отдельных компонентов по их идентификаторам."""
+        return self._delete_buttons
 
     def _build_ui(self) -> None:
         """Формирует компоновку диалогового окна."""
@@ -316,6 +353,15 @@ class DependencySetupDialog(QDialog):
             badge.setObjectName("sizeBadge")
         self._status_labels[item.id] = badge
         top_row.addWidget(badge, alignment=Qt.AlignmentFlag.AlignRight)
+
+        del_btn = QPushButton("Удалить", card)
+        del_btn.setObjectName("cardDeleteBtn")
+        del_btn.setVisible(item.installed)
+        del_btn.clicked.connect(
+            lambda _checked=False, iid=item.id: self._on_delete_item_clicked(iid)
+        )
+        self._delete_buttons[item.id] = del_btn
+        top_row.addWidget(del_btn, alignment=Qt.AlignmentFlag.AlignRight)
         card_layout.addLayout(top_row)
 
         desc = QLabel(item.description, card)
@@ -365,6 +411,11 @@ class DependencySetupDialog(QDialog):
         )
         self._secondary_btn.clicked.connect(self._on_secondary_clicked)
         btn_row.addWidget(self._secondary_btn)
+
+        self._delete_all_btn = QPushButton("Удалить все зависимости", self)
+        self._delete_all_btn.setObjectName("dangerButton")
+        self._delete_all_btn.clicked.connect(self._on_delete_all_clicked)
+        btn_row.addWidget(self._delete_all_btn)
 
         btn_row.addStretch(1)
 
@@ -450,6 +501,9 @@ class DependencySetupDialog(QDialog):
         self._warning_label.hide()
         for cb in self._checkboxes.values():
             cb.setEnabled(False)
+        for btn in self._delete_buttons.values():
+            btn.setEnabled(False)
+        self._delete_all_btn.setEnabled(False)
 
         self._primary_btn.setEnabled(False)
         self._primary_btn.setText("Загрузка...")
@@ -474,25 +528,133 @@ class DependencySetupDialog(QDialog):
         self._progress_bar.setValue(int(round(progress.overall_percent)))
         self._progress_detail.setText(progress.status_text)
 
-    def _on_download_finished(self, result: DownloadResult) -> None:
-        """Обрабатывает завершение фоновой загрузки и обновляет статусы карточек."""
-        self._last_result = result
+    def _sync_cards_from_report(self, *, reset_uninstalled_checks: bool) -> None:
+        """Синхронизирует карточки, бейджи и кнопки удаления с актуальным inspect()."""
         self._report = self._manager.inspect()
-
         for item in self._report.items:
             cb = self._checkboxes[item.id]
             badge = self._status_labels[item.id]
+            del_btn = self._delete_buttons[item.id]
             if item.installed:
                 cb.setChecked(True)
                 cb.setEnabled(False)
                 badge.setText("✓ Установлено")
                 badge.setObjectName("statusInstalled")
             else:
+                if reset_uninstalled_checks:
+                    cb.setChecked(False)
                 cb.setEnabled(True)
                 badge.setText(format_size_ru(item.approx_size_mb))
                 badge.setObjectName("sizeBadge")
+            del_btn.setVisible(item.installed)
+            del_btn.setEnabled(True)
             badge.style().unpolish(badge)
             badge.style().polish(badge)
+        self._refresh_storage_and_delete_all()
+
+    def _refresh_storage_and_delete_all(self) -> None:
+        """Обновляет метку занятого/свободного места и кнопку полного удаления."""
+        installed_mb = self._manager.get_installed_size_mb()
+        self._storage_label.setText(
+            f"Папка моделей: {self._report.models_dir}  •  "
+            f"Занято: {format_size_ru(installed_mb)}  •  "
+            f"Свободно на диске: {format_size_ru(self._report.free_space_mb)}"
+        )
+        has_installed = installed_mb > 0.0 or any(it.installed for it in self._report.items)
+        if installed_mb > 0.0:
+            self._delete_all_btn.setText(
+                f"Удалить все зависимости (~{format_size_ru(installed_mb)})"
+            )
+        else:
+            self._delete_all_btn.setText("Удалить все зависимости")
+        self._delete_all_btn.setVisible(has_installed)
+        self._delete_all_btn.setEnabled(True)
+
+    def _default_confirm_delete(self, title: str, message: str) -> bool:
+        """Стандартный диалог подтверждения удаления через QMessageBox."""
+        answer = QMessageBox.question(
+            self,
+            title,
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _on_delete_item_clicked(self, item_id: str) -> None:
+        """Запрашивает подтверждение и удаляет один выбранный компонент."""
+        item_map = {it.id: it for it in self._report.items}
+        item = item_map.get(item_id)
+        item_name = item.name if item is not None else item_id
+        size_mb = self._manager.get_installed_size_mb(item_id)
+        size_note = f" (~{format_size_ru(size_mb)})" if size_mb > 0.0 else ""
+        self._execute_delete(
+            title="Удаление компонента",
+            message=f"Удалить локальные файлы компонента «{item_name}»{size_note}?",
+            delete_fn=lambda: self._manager.delete_item(item_id),
+        )
+
+    def _on_delete_all_clicked(self) -> None:
+        """Запрашивает подтверждение и удаляет все загруженные модели и бинарники."""
+        total_mb = self._manager.get_installed_size_mb()
+        size_note = f" (~{format_size_ru(total_mb)})" if total_mb > 0.0 else ""
+        self._execute_delete(
+            title="Удаление всех зависимостей",
+            message=(
+                f"Удалить все скачанные модели и llama-server.exe{size_note}?\n"
+                "Настройки и база памяти config/memory.db сохранятся."
+            ),
+            delete_fn=self._manager.delete_all_dependencies,
+        )
+
+    def _execute_delete(
+        self,
+        *,
+        title: str,
+        message: str,
+        delete_fn: Callable[[], DeleteResult],
+    ) -> None:
+        """Выполняет удаление с подтверждением, хуками блокировок и обновлением UI."""
+        if self._worker is not None and self._worker.isRunning():
+            return
+        confirm_fn = self._confirm_delete or self._default_confirm_delete
+        if not confirm_fn(title, message):
+            return
+
+        if self._on_before_delete is not None:
+            self._on_before_delete()
+
+        result = delete_fn()
+
+        if self._on_after_delete is not None:
+            self._on_after_delete()
+
+        self._completed_successfully = False
+        self._sync_cards_from_report(reset_uninstalled_checks=True)
+        self._refresh_selection_summary()
+
+        self._progress_container.show()
+        self._progress_bar.setValue(100 if result.ok else 0)
+        self._progress_detail.setText("")
+        freed_str = format_size_ru(result.freed_mb)
+        if result.ok:
+            self._warning_label.hide()
+            self._progress_title.setText(
+                f"✓ Удалено файлов: {result.deleted_files}, освобождено {freed_str}."
+            )
+            return
+
+        errors_preview = "; ".join(f"{k}: {v}" for k, v in result.failed.items())
+        self._progress_title.setText(
+            f"Удалено файлов: {result.deleted_files}, освобождено {freed_str} (есть ошибки)."
+        )
+        self._warning_label.setText(f"Не удалось удалить: {errors_preview}")
+        self._warning_label.show()
+
+    def _on_download_finished(self, result: DownloadResult) -> None:
+        """Обрабатывает завершение фоновой загрузки и обновляет статусы карточек."""
+        self._last_result = result
+        self._sync_cards_from_report(reset_uninstalled_checks=False)
 
         self._primary_btn.setEnabled(True)
         self._secondary_btn.setEnabled(True)

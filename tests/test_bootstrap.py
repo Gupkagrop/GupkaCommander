@@ -35,9 +35,11 @@ from core.bootstrap import (
     QWEN_TTS_MODEL_FILENAME,
     VLM_MMPROJ_FILENAME,
     VLM_MODEL_FILENAME,
+    DeleteResult,
     DependencyManager,
     DownloadProgress,
     _safe_extract_zip,
+    _safe_remove_path,
     _select_llama_asset,
     format_size_ru,
 )
@@ -500,3 +502,200 @@ class TestDependencySetupDialogGUI:
         )
         assert "'core.bootstrap'" in spec_text
         assert "'gui.setup_dialog'" in spec_text
+
+
+class TestDependencyDeletionAndSize:
+    """Тесты безопасного удаления зависимостей и подсчета размера строго в tmp_path."""
+
+    def test_safe_remove_path_guards_roots_outside_paths_and_symlinks(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_safe_remove_path отклоняет корень, внешние пути и симлинки с выходом наружу."""
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        memory_db = config_dir / "memory.db"
+        memory_db.write_bytes(b"sqlite-keep")
+
+        # 1. Внутри models_dir удаляется успешно с точным подсчётом байт
+        inside_file = models_dir / "temp.bin"
+        inside_file.write_bytes(b"123456")
+        assert _safe_remove_path(inside_file, models_dir) == 6
+        assert not inside_file.exists()
+
+        # 2. Нельзя удалить сам корень allowed_root
+        with pytest.raises(ValueError):
+            _safe_remove_path(models_dir, models_dir)
+
+        # 3. Нельзя удалить config/memory.db (напрямую и через ..)
+        with pytest.raises(ValueError):
+            _safe_remove_path(memory_db, models_dir)
+        with pytest.raises(ValueError):
+            _safe_remove_path(models_dir / ".." / "config" / "memory.db", models_dir)
+        assert memory_db.exists()
+
+        # 4. Симлинк, ведущий за пределы allowed_root, блокируется
+        escape_link = models_dir / "escape_link"
+        monkeypatch.setattr(Path, "is_symlink", lambda p: p == escape_link)
+        orig_resolve = Path.resolve
+
+        def _fake_resolve(self: Path, strict: bool = False) -> Path:
+            if self == escape_link:
+                return memory_db
+            return orig_resolve(self, strict=strict)
+
+        monkeypatch.setattr(Path, "resolve", _fake_resolve)
+        with pytest.raises(ValueError):
+            _safe_remove_path(escape_link, models_dir)
+        assert memory_db.exists()
+
+    def test_get_installed_size_delete_item_and_delete_all(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Проверка подсчета МБ, выборочного delete_item (включая legacy) и delete_all."""
+        models_dir = tmp_path / "models"
+        bin_dir = tmp_path / "bin"
+        config_dir = tmp_path / "config"
+        state_file = config_dir / "bootstrap_state.json"
+
+        models_dir.mkdir()
+        bin_dir.mkdir()
+        config_dir.mkdir()
+        memory_db = config_dir / "memory.db"
+        settings_json = config_dir / "settings.json"
+        memory_db.write_bytes(b"keep-db")
+        settings_json.write_text('{"ui": {"theme": "dark"}}', encoding="utf-8")
+
+        # Внешний бинарник в PATH не должен удаляться
+        external_bin = tmp_path / "external_path" / "llama-server.exe"
+        external_bin.parent.mkdir()
+        external_bin.write_bytes(b"EXT")
+        monkeypatch.setattr("core.bootstrap.shutil.which", lambda _n: str(external_bin))
+        monkeypatch.setattr("core.bootstrap.get_bundle_root", lambda: tmp_path / "bundle")
+
+        mgr = DependencyManager(models_dir=models_dir, bin_dir=bin_dir, state_file=state_file)
+        mgr.save_skip_prompt(True)
+
+        # Заполняем модели, legacy v1 GGUF, .part и bin
+        (models_dir / "silero_vad.onnx").write_bytes(b"a" * 1024)
+        (models_dir / "silero_vad.onnx.part").write_bytes(b"b" * 512)
+        (models_dir / "piper").mkdir()
+        (models_dir / "piper" / "ru_RU-dmitri-medium.onnx").write_bytes(b"p" * 2048)
+        (models_dir / "piper" / "ru_RU-dmitri-medium.onnx.json").write_bytes(b"j" * 128)
+        (models_dir / "whisper").mkdir()
+        (models_dir / "whisper" / "model.bin").write_bytes(b"w" * 4096)
+        (models_dir / "gigaam").mkdir()
+        (models_dir / "gigaam" / GIGAAM_MODEL_FILENAME).write_bytes(b"g" * 1024)
+        (models_dir / "tts").mkdir()
+        (models_dir / "tts" / QWEN_TTS_MODEL_FILENAME).write_bytes(b"t" * 2048)
+        (models_dir / "llm").mkdir()
+        (models_dir / "llm" / VLM_MODEL_FILENAME).write_bytes(b"v" * 4096)
+        (models_dir / "llm" / "qwen3-vl-4b-instruct-q4_k_m.gguf").write_bytes(b"l" * 1024)
+        (models_dir / "llm" / "mmproj-qwen3-vl-4b-instruct-q8_0.gguf.part").write_bytes(b"m" * 512)
+        (bin_dir / "llama-server.exe").write_bytes(b"MZ" * 1024)
+
+        total_mb = mgr.get_installed_size_mb()
+        expected_total = (
+            1024 + 512 + 2048 + 128 + 4096 + 1024 + 2048 + 4096 + 1024 + 512 + 2048
+        ) / (1024 * 1024)
+        assert total_mb == pytest.approx(expected_total)
+        assert mgr.get_installed_size_mb("vlm_qwen") == pytest.approx(
+            (4096 + 1024 + 512) / (1024 * 1024)
+        )
+
+        # Выборочное удаление vlm_qwen (включая legacy и .part) + пустой подкаталог llm удаляется
+        vlm_res = mgr.delete_item("vlm_qwen")
+        assert isinstance(vlm_res, DeleteResult)
+        assert vlm_res.ok is True
+        assert vlm_res.deleted_items == ["vlm_qwen"]
+        assert vlm_res.deleted_files == 3
+        assert vlm_res.freed_bytes == 4096 + 1024 + 512
+        assert not (models_dir / "llm").exists()
+
+        # Удаление llama_server чистит только bin_dir и не трогает external_bin из PATH
+        llama_res = mgr.delete_item("llama_server")
+        assert llama_res.ok is True
+        assert llama_res.freed_bytes == 2048
+        assert external_bin.exists()
+
+        # Неизвестный ID возвращает ошибку
+        bad_res = mgr.delete_item("unknown_dep")
+        assert bad_res.ok is False
+        assert "unknown_dep" in bad_res.failed
+
+        # Полное удаление оставшихся зависимостей + сброс skip_prompt=False
+        all_res = mgr.delete_all_dependencies(reset_skip_prompt=True)
+        assert all_res.ok is True
+        assert all_res.deleted_files > 0
+        assert mgr.get_installed_size_mb() == 0.0
+        assert mgr.is_skip_prompt_saved() is False
+        assert memory_db.exists()
+        assert settings_json.exists()
+        assert external_bin.exists()
+
+    def test_dialog_delete_single_and_all_with_confirm_and_hooks(
+        self, qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Проверка кнопок «Удалить» и «Удалить все зависимости» с подтверждением и отменой."""
+        monkeypatch.setattr("core.bootstrap.shutil.which", lambda _name: None)
+        monkeypatch.setattr("core.bootstrap.get_bundle_root", lambda: tmp_path / "bundle")
+
+        models_dir = tmp_path / "models"
+        bin_dir = tmp_path / "bin"
+        models_dir.mkdir()
+        bin_dir.mkdir()
+        (models_dir / "silero_vad.onnx").write_bytes(b"v" * (MIN_VAD_BYTES + 10))
+        (models_dir / "piper").mkdir()
+        (models_dir / "piper" / "ru_RU-dmitri-medium.onnx").write_bytes(
+            b"p" * (MIN_PIPER_BYTES + 10)
+        )
+        (models_dir / "piper" / "ru_RU-dmitri-medium.onnx.json").write_text(
+            '{"audio": {"sample_rate": 22050}, "espeak": {"voice": "ru"}}', encoding="utf-8"
+        )
+
+        mgr = DependencyManager(
+            models_dir=models_dir,
+            bin_dir=bin_dir,
+            state_file=tmp_path / "config" / "bootstrap_state.json",
+        )
+
+        hook_events: list[str] = []
+        confirm_answer = [False]
+
+        dialog = DependencySetupDialog(
+            manager=mgr,
+            manage_mode=True,
+            on_before_delete=lambda: hook_events.append("before"),
+            on_after_delete=lambda: hook_events.append("after"),
+            confirm_delete=lambda _t, _m: confirm_answer[0],
+        )
+
+        assert not dialog.delete_buttons["silero_vad"].isHidden()
+        assert not dialog.delete_buttons["piper_tts"].isHidden()
+        assert dialog.delete_buttons["vlm_qwen"].isHidden()
+        assert not dialog._delete_all_btn.isHidden()
+        assert "Удалить все зависимости" in dialog._delete_all_btn.text()
+
+        # 1. Отмена удаления не трогает файлы и не вызывает хуки
+        dialog.delete_buttons["silero_vad"].click()
+        assert (models_dir / "silero_vad.onnx").exists()
+        assert hook_events == []
+
+        # 2. Подтвержденное удаление одного компонента
+        confirm_answer[0] = True
+        dialog.delete_buttons["silero_vad"].click()
+        assert not (models_dir / "silero_vad.onnx").exists()
+        assert (models_dir / "piper" / "ru_RU-dmitri-medium.onnx").exists()
+        assert hook_events == ["before", "after"]
+        assert dialog.delete_buttons["silero_vad"].isHidden()
+        assert not dialog.delete_buttons["piper_tts"].isHidden()
+        assert not dialog._delete_all_btn.isHidden()
+
+        # 3. Подтвержденное удаление всех зависимостей
+        dialog._delete_all_btn.click()
+        assert mgr.get_installed_size_mb() == 0.0
+        assert hook_events == ["before", "after", "before", "after"]
+        assert dialog.delete_buttons["piper_tts"].isHidden()
+        assert dialog._delete_all_btn.isHidden()
+        dialog.close()

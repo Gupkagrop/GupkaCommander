@@ -232,6 +232,7 @@ class GupkaCommanderApp(QObject):
         self._is_shutting_down: bool = False
         self._is_executing_command: bool = False
         self._applying_ui_settings: bool = False
+        self._voice_was_running_before_delete: bool = False
         self._execution_lock: threading.Lock = threading.Lock()
         self.voice_bridge = VoiceBridge()
 
@@ -1506,11 +1507,63 @@ class GupkaCommanderApp(QObject):
             except Exception as exc:
                 logger.debug("Ошибка при остановке синтезатора: %s", exc)
 
+    def _release_dependency_locks(self) -> None:
+        """Останавливает llama-server и освобождает файловые блокировки голосовых моделей."""
+        try:
+            self.llama_manager.stop()
+        except Exception as exc:
+            logger.debug("Ошибка остановки llama_manager перед удалением: %s", exc)
+
+        is_running_fn = getattr(self.voice_pipeline, "is_running", None)
+        was_running = bool(is_running_fn()) if callable(is_running_fn) else False
+        self._voice_was_running_before_delete = was_running
+        if was_running:
+            try:
+                self.voice_pipeline.stop()
+            except Exception as exc:
+                logger.debug("Ошибка остановки voice_pipeline перед удалением: %s", exc)
+
+        release_fn = getattr(self.voice_pipeline, "release_models", None)
+        if callable(release_fn):
+            try:
+                release_fn()
+            except Exception as exc:
+                logger.debug("Ошибка release_models перед удалением: %s", exc)
+
+    def _on_dependencies_changed(self) -> None:
+        """Перезагружает голосовые движки, чипы и при наличии VAD перезапускает голос."""
+        reload_fn = getattr(self.voice_pipeline, "reload_engines_from_settings", None)
+        if callable(reload_fn):
+            try:
+                reload_fn()
+            except Exception as exc:
+                logger.debug("Ошибка перезагрузки движков после изменения зависимостей: %s", exc)
+
+        was_running = self._voice_was_running_before_delete
+        self._voice_was_running_before_delete = False
+
+        if was_running and self.enable_voice:
+            from core.bootstrap import DependencyManager
+
+            report = DependencyManager().inspect()
+            vad_installed = any(it.id == "silero_vad" and it.installed for it in report.items)
+            if vad_installed:
+                try:
+                    self.voice_pipeline.start()
+                except Exception as exc:
+                    logger.warning("Не удалось перезапустить голосовой конвейер: %s", exc)
+
+        self._refresh_context_chips()
+
     def open_dependency_manager(self) -> None:
         """Открывает диалог управления локальными моделями и зависимостями."""
         from gui.setup_dialog import DependencySetupDialog
 
-        dialog = DependencySetupDialog(manage_mode=True)
+        dialog = DependencySetupDialog(
+            manage_mode=True,
+            on_before_delete=self._release_dependency_locks,
+            on_after_delete=self._on_dependencies_changed,
+        )
         dialog.exec()
 
     def open_settings_dialog(self) -> None:
@@ -1685,7 +1738,51 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Пропустить автоматическую проверку и диалог загрузки моделей при старте",
     )
+    parser.add_argument(
+        "--remove-dependencies",
+        action="store_true",
+        help="Удалить все скачанные модели и llama-server.exe без запуска GUI",
+    )
+    parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Подтвердить CLI-операцию удаления зависимостей без запроса ввода",
+    )
     return parser.parse_args()
+
+
+def _handle_cli_remove_dependencies(assume_yes: bool) -> int:
+    """Выполняет безопасное удаление моделей и бинарников через CLI без GUI."""
+    from core.bootstrap import DependencyManager, format_size_ru
+
+    manager = DependencyManager()
+    total_mb = manager.get_installed_size_mb()
+    if not assume_yes:
+        prompt = (
+            f"Удалить все скачанные модели и llama-server.exe (~{format_size_ru(total_mb)}) "
+            f"в {manager.models_dir} и {manager.bin_dir}? [y/N]: "
+        )
+        try:
+            answer = input(prompt).strip().lower()
+        except EOFError:
+            answer = ""
+        if answer not in {"y", "yes", "д", "да"}:
+            print("Удаление зависимостей отменено.")
+            return 0
+
+    result = manager.delete_all_dependencies()
+    freed_str = format_size_ru(result.freed_mb)
+    if result.ok:
+        print(f"Готово: удалено файлов — {result.deleted_files}, освобождено {freed_str}.")
+        return 0
+
+    errors = "; ".join(f"{k}: {v}" for k, v in result.failed.items())
+    print(
+        f"Удаление завершено с ошибками: удалено файлов — {result.deleted_files}, "
+        f"освобождено {freed_str}. Ошибки: {errors}"
+    )
+    return 1
 
 
 def main() -> int:
@@ -1698,6 +1795,9 @@ def main() -> int:
     logger.info("Запуск GupkaCommander. Лог-файл: %s", log_path)
 
     args = parse_arguments()
+
+    if args.remove_dependencies:
+        return _handle_cli_remove_dependencies(assume_yes=bool(args.yes))
 
     if args.headless or os.environ.get("QT_QPA_PLATFORM") == "offscreen":
         os.environ["QT_QPA_PLATFORM"] = "offscreen"

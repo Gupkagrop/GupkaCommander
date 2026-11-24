@@ -6,8 +6,8 @@
 
 ## 1. Project Health & Stage
 - **Current Phase:** GupkaCommander 2.0 Release (Fluent 2 «Губка» Docked Blade UI, 3-Tier Router + ReAct CDP/UIA/SoM, Multi-Monitor Per-Monitor DPI v2, Memory v2 FTS5, GPU-стек Qwen3.5-4B / Qwen3-TTS / GigaAM v3 ONNX)
-- **Status:** Production-Grade Release 2.0 (763/763 Tests Green, 0 Ruff in 110 files, 0 Mypy Strict in 102 files)
-- **Last Updated:** 2026-11-24 20:05
+- **Status:** Production-Grade Release 2.0 (769/769 Tests Green, 0 Ruff in 110 files, 0 Mypy Strict in 102 files)
+- **Last Updated:** 2026-11-24 20:40
 - **Active Branch:** `main`
 
 ## 2. Completed Milestones
@@ -73,10 +73,16 @@
   4. `config/settings.json` и `gui/settings_dialog.py`: явный блок `"ui"` и `context_window: 8192` в `_default_settings()`.
   5. Упаковка v2.0.0 (`scripts/installer.iss`, `scripts/build_installer.py`, `scripts/build_executable.py`): версия `"2.0.0"`, инсталлятор `GupkaCommander-Setup-v2.0.0.exe` и генерация портативного архива `dist/GupkaCommander-v2.0.0-win64-portable.zip` (**357.59 MB**).
   6. Верификация и сборка: `ruff` (0 в 110 файлах), `mypy` (0 в 102 файлах), `pytest` (**763/763 passed**), пересобран `GupkaCommander.exe` (**70.75 MB**), headless smoke-test пройден (`ExitCode == 0`).
+- [x] **2026-11-24 Безопасное удаление зависимостей, стабильный голос Qwen3-TTS и документация v2.0:**
+  1. `core/bootstrap.py`: добавлены `DeleteResult`, изоляционная защита `_safe_remove_path` (строго внутри `models_dir`/`bin_dir` с проверкой симлинков), точный подсчёт размера `DependencyManager.get_installed_size_mb()`, выборочное удаление `delete_item()` (включая legacy v1 `qwen3-vl-4b*` и `.part`) и полное удаление `delete_all_dependencies(reset_skip_prompt=True)`.
+  2. `assets/default_speaker_ru.wav` и `core/voice/voice_pipeline.py`: сгенерирован 3.76-сек русский эталон речи через Piper (`DEFAULT_SPEAKER_REF_FILENAME`, `DEFAULT_SPEAKER_REF_TEXT`), интегрировано чтение `lang`/`speaker_ref_path`/`speaker_ref_text` в `VoicePipeline`, добавлен метод `VoicePipeline.release_models()` для снятия блокировок `.onnx`/`.bin`. Проведён живой GPU-тест Qwen3-TTS `:8081` (HTTP 200 WAV 24 кГц 3.52 с, без `no speaker reference`).
+  3. `gui/setup_dialog.py`, `main.py`, `scripts/installer.iss`: добавлены кнопка `Удалить` на карточках, `Удалить все зависимости`, хуки `_release_dependency_locks()` и `_on_dependencies_changed()`, CLI `--remove-dependencies [--yes]` и секция `[UninstallDelete]` в инсталляторе (с сохранением `config\memory.db` и `settings.json`).
+  4. `README.md`: актуализирована документация под GupkaCommander 2.0 (Fluent 2 Docked Blade «Губка», 8 зон докинга, 3-уровневый роутер + ReAct CDP/UIA/SoM, GPU-стек, удаление зависимостей).
+  5. Верификация и сборка: `ruff` (0 в 110 файлах), `mypy` (0 в 102 файлах), `pytest` (**769/769 passed** за 21.97 с), пересобран `GupkaCommander.exe` (**70.77 MB**, пакет **898.88 MB**) и `GupkaCommander-v2.0.0-win64-portable.zip` (**357.75 MB**), подтверждён `assets/default_speaker_ru.wav` внутри `_internal/assets/`, пройдены оба smoke-теста `.exe` (headless `ExitCode == 0` и живой GUI `qwindows.dll` без ошибок в логе).
 
 ## 3. Active Task (Current Focus)
 - **Feature:** Релиз GupkaCommander 2.0 — Fluent 2 «Губка», ReAct CDP/UIA/SoM и GPU-стек 2026.
-- **Status:** Все фазы и финальные доводки объединены в `main`; 763/763 тестов зелёные (100%), 0 ошибок `mypy` в 102 файлах, 0 ошибок `ruff` в 110 файлах; `GupkaCommander.exe` (70.75 MB) и `GupkaCommander-v2.0.0-win64-portable.zip` (357.59 MB) собраны и подтверждены headless smoke-тестом.
+- **Status:** Все фазы и финальные доводки объединены в `main`; 769/769 тестов зелёные (100%), 0 ошибок `mypy` в 102 файлах, 0 ошибок `ruff` в 110 файлах; `GupkaCommander.exe` (70.77 MB) и `GupkaCommander-v2.0.0-win64-portable.zip` (357.75 MB) собраны и подтверждены headless и живым GUI smoke-тестами.
 - **Verification Plan:** Завершено. Опубликовано в `origin/main`.
 
 ## 4. Next Immediate Steps (Backlog)
